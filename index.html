@@ -34,7 +34,10 @@ header { background:rgba(247,247,248,.92); backdrop-filter:blur(12px); border-bo
 .nav-btn.active { background:#fff; color:var(--accent); box-shadow:0 1px 4px rgba(0,0,0,.12); font-weight:600; }
 .chat-container { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:12px; min-height:0; }
 #app-version { text-align:center; font-size:.68rem; color:#8e8e93; opacity:.55; padding:0 12px 4px; flex-shrink:0; }
-.product-tile { display:flex; gap:12px; align-items:center; margin:12px 16px 0; padding:10px 12px; background:#fff; border:1px solid var(--border); border-radius:16px; text-align:left; cursor:pointer; box-shadow:var(--shadow); flex-shrink:0; color:inherit; font:inherit; }
+.product-tile { display:flex; gap:8px; align-items:center; margin:12px 16px 0; padding:10px 8px 10px 12px; background:#fff; border:1px solid var(--border); border-radius:16px; box-shadow:var(--shadow); flex-shrink:0; color:inherit; }
+.potd-main { display:flex; gap:12px; align-items:center; flex:1; min-width:0; background:none; border:none; padding:0; text-align:left; color:inherit; font:inherit; cursor:pointer; }
+.potd-caret { width:32px; height:32px; border:none; background:none; color:#38539A; font-size:1.05rem; cursor:pointer; flex-shrink:0; }
+.product-tile.collapsed .potd-img, .product-tile.collapsed .potd-name, .product-tile.collapsed .potd-line { display:none; }
 .product-tile img { width:64px; height:64px; object-fit:contain; border-radius:12px; background:#f3f4f8; flex-shrink:0; }
 .potd-kicker { font-size:.68rem; letter-spacing:.06em; text-transform:uppercase; color:#38539A; font-weight:700; }
 .potd-name { font-weight:650; font-size:.95rem; margin-top:2px; }
@@ -142,18 +145,21 @@ body.in #app { display:flex; }
   </header>
 
   <div id="chat-view" style="display:flex;flex-direction:column;flex:1;min-height:0;">
-    <button type="button" id="product-tile" class="product-tile" onclick="openProductOfDay()">
-      <img id="potd-img" alt="">
-      <div>
-        <div class="potd-kicker">Product of the day</div>
-        <div class="potd-name" id="potd-name"></div>
-        <div class="potd-line" id="potd-line"></div>
-      </div>
-    </button>
+    <div id="product-tile" class="product-tile">
+      <button type="button" class="potd-main" onclick="openProductOfDay()">
+        <img id="potd-img" class="potd-img" alt="">
+        <div>
+          <div class="potd-kicker">Product of the day</div>
+          <div class="potd-name" id="potd-name"></div>
+          <div class="potd-line" id="potd-line"></div>
+        </div>
+      </button>
+      <button type="button" id="potd-caret" class="potd-caret" onclick="toggleProductTile()" aria-label="Collapse product of the day">▾</button>
+    </div>
     <div class="chat-container" id="chat">
       <div class="message bot">Welcome back McKinley</div>
     </div>
-    <div id="app-version">Version beta 1.7</div>
+    <div id="app-version">Version beta 1.8</div>
     <div class="quick-actions" id="quick-actions">
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Add customer '">+ Customer</button>
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Called '">Log activity</button>
@@ -460,8 +466,24 @@ function renderProductTile() {
   img.alt = p.name;
   document.getElementById('potd-name').textContent = p.name;
   document.getElementById('potd-line').textContent = p.line;
+  let collapsed = false;
+  try { collapsed = localStorage.getItem('cc-potd-collapsed') === '1'; } catch (e) {}
+  setProductTile(collapsed);
+}
+function setProductTile(collapsed) {
+  const tile = document.getElementById('product-tile');
+  tile.classList.toggle('collapsed', collapsed);
+  const caret = document.getElementById('potd-caret');
+  caret.textContent = collapsed ? '▸' : '▾';
+  caret.setAttribute('aria-label', collapsed ? 'Show product of the day' : 'Collapse product of the day');
+}
+function toggleProductTile() {
+  const collapsed = !document.getElementById('product-tile').classList.contains('collapsed');
+  setProductTile(collapsed);
+  try { localStorage.setItem('cc-potd-collapsed', collapsed ? '1' : '0'); } catch (e) {}
 }
 function openProductOfDay() {
+  if (document.getElementById('product-tile').classList.contains('collapsed')) return;
   const p = productOfDay();
   openModal(`<button class="modal-close" onclick="closeModal()">×</button>
     <div class="potd-kicker">Product of the day</div>
