@@ -117,7 +117,7 @@ label { display:block; font-size:.8rem; color:var(--dim); margin-top:12px; }
 <div id="modal" class="modal" onclick="if(event.target.id==='modal')closeModal()"><div class="modal-content" id="modal-content"></div></div>
 
 <script>
-const SUPABASE_URL = 'https://igfzsivcupfcigzrmltw.supabase.co';
+const SUPABASE_URL = 'https://igfzsivcupfcigzrmltw.sb.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_m6SeJ_f2BPMUvGdR80xyow_zOvMFCp4';
 function previewClient() {
   const bags = () => ({ customers, activities, reminders });
@@ -162,11 +162,11 @@ function previewClient() {
   };
 }
 const PREVIEW = new URLSearchParams(location.search).has('preview') || location.hostname.endsWith('ship.place');
-let supabase;
+let sb;
 try {
-  supabase = PREVIEW ? previewClient() : window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  sb = PREVIEW ? previewClient() : window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 } catch (e) {
-  supabase = previewClient();
+  sb = previewClient();
 }
 
 let currentUser = null;
@@ -217,13 +217,13 @@ function displayName() {
 
 async function signIn() {
   document.getElementById('login-error').textContent = '';
-  const { error } = await supabase.auth.signInWithOAuth({
+  const { error } = await sb.auth.signInWithOAuth({
     provider: 'google',
     options: { redirectTo: location.origin + location.pathname }
   });
   if (error) document.getElementById('login-error').textContent = error.message;
 }
-async function signOut() { await supabase.auth.signOut(); location.reload(); }
+async function signOut() { await sb.auth.signOut(); location.reload(); }
 
 async function boot() {
   if (PREVIEW) {
@@ -251,7 +251,7 @@ async function boot() {
     document.getElementById('chat-input').addEventListener('keydown', e => { if (e.key === 'Enter') sendMessage(); });
     return;
   }
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data: { session } } = await sb.auth.getSession();
   if (!session) return;
   currentUser = session.user;
   document.getElementById('login-screen').style.display = 'none';
@@ -266,15 +266,15 @@ async function boot() {
 async function loadData() {
   const uid = currentUser.id;
   const [c, a, r] = await Promise.all([
-    supabase.from('customers').select('*').order('name'),
-    supabase.from('activities').select('*').order('date', { ascending: false }),
-    supabase.from('reminders').select('*').eq('completed', false).order('reminder_date')
+    sb.from('customers').select('*').order('name'),
+    sb.from('activities').select('*').order('date', { ascending: false }),
+    sb.from('reminders').select('*').eq('completed', false).order('reminder_date')
   ]);
   if (c.error) { await addMessage('Could not load customers. Run the SQL setup in Supabase first. ' + c.error.message); }
   customers = c.data || [];
   activities = a.data || [];
   reminders = r.data || [];
-  const profile = await supabase.from('profiles').select('amway_id').eq('id', uid).maybeSingle();
+  const profile = await sb.from('profiles').select('amway_id').eq('id', uid).maybeSingle();
   myIbo = profile.data?.amway_id || '';
 }
 
@@ -297,11 +297,11 @@ async function addMessage(text, who = 'bot', html = false, persist = true) {
   chat.appendChild(div);
   chat.scrollTop = chat.scrollHeight;
   if (persist && currentUser && !(PREVIEW && who === 'bot' && text.startsWith('Welcome'))) {
-    await supabase.from('chat_messages').insert({ user_id: currentUser.id, role: who === 'user' ? 'user' : 'assistant', content: text });
+    await sb.from('chat_messages').insert({ user_id: currentUser.id, role: who === 'user' ? 'user' : 'assistant', content: text });
   }
 }
 async function restoreChat() {
-  const { data, error } = await supabase.from('chat_messages').select('*').order('created_at', { ascending: true }).limit(200);
+  const { data, error } = await sb.from('chat_messages').select('*').order('created_at', { ascending: true }).limit(200);
   if (error || !data || !data.length) {
     const name = displayName();
     await addMessage(name ? 'Welcome back ' + name : 'Welcome Back');
@@ -426,10 +426,10 @@ register({
   run: async (text) => {
     const lookup = text.replace(/^share with\b/i, '').replace(/^ibo\b/i, '').trim();
     if (!lookup) { await addMessage('Use Share with name@email.com or Share with IBO 123456.'); return; }
-    const { data, error } = await supabase.rpc('find_ibo', { lookup });
+    const { data, error } = await sb.rpc('find_ibo', { lookup });
     if (error) { await addMessage('Sharing is not ready yet. Run the find_ibo SQL in Supabase, then try again.'); return; }
     if (!data) { await addMessage('No IBO found for ' + lookup + '. They need an account, and an IBO number only works after they save it in More.'); return; }
-    const { error: insErr } = await supabase.from('shares').insert({ owner_id: currentUser.id, recipient_id: data, scope: 'all' });
+    const { error: insErr } = await sb.from('shares').insert({ owner_id: currentUser.id, recipient_id: data, scope: 'all' });
     if (insErr) { await addMessage('Share failed: ' + insErr.message); return; }
     await addMessage('Shared your customer circle with ' + lookup + '.');
   }
@@ -461,7 +461,7 @@ register({
     const name = cleaned.split(/[.\n]/)[0].replace(/\s+/g, ' ').trim();
     if (!name) { await addMessage("I need a name."); return; }
     const row = { user_id: currentUser.id, name, preferred, how_met: howMet, sponsor_id: sponsorId, phone: '', email: '', notes: '' };
-    const { data, error } = await supabase.from('customers').insert(row).select().single();
+    const { data, error } = await sb.from('customers').insert(row).select().single();
     if (error) { await addMessage('Could not add customer: ' + error.message); return; }
     customers.push(data);
     await addMessage(`Added <strong>${esc(data.name)}</strong>${howMet ? ' (met at ' + esc(howMet) + ')' : ''}. Preferred: ${esc(preferred)}.`, 'bot', true);
@@ -492,10 +492,10 @@ function cleanNotes(text, name) {
 }
 async function finishActivity(customer, type, notes) {
   const row = { user_id: currentUser.id, customer_id: customer.id, date: today(), type, notes: notes || '' };
-  const { data, error } = await supabase.from('activities').insert(row).select().single();
+  const { data, error } = await sb.from('activities').insert(row).select().single();
   if (error) { await addMessage('Could not log activity: ' + error.message); return; }
   activities.unshift(data);
-  await supabase.from('customers').update({ last_contact: today() }).eq('id', customer.id);
+  await sb.from('customers').update({ last_contact: today() }).eq('id', customer.id);
   customer.last_contact = today();
   pending = null;
   await addMessage(`Logged <strong>${esc(type)}</strong> for ${esc(customer.name)}${notes ? ': ' + esc(notes) : ''}.`, 'bot', true);
@@ -556,7 +556,7 @@ register({
     }
     const when = parseWhen(cleaned);
     const action = cleaned.replace(new RegExp(customer.name, 'i'), '').replace(/\b(on|in|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week)\b/ig, '').replace(/\s+/g, ' ').trim();
-    const { data, error } = await supabase.from('reminders').insert({
+    const { data, error } = await sb.from('reminders').insert({
       user_id: currentUser.id, customer_id: customer.id, reminder_date: when, action: action || 'Check in'
     }).select().single();
     if (error) { await addMessage('Could not save reminder: ' + error.message); return; }
@@ -596,7 +596,7 @@ function renderReminders() {
   }).join('') : '<div class="empty">No active reminders.</div>';
 }
 async function completeReminder(id) {
-  await supabase.from('reminders').update({ completed: true }).eq('id', id);
+  await sb.from('reminders').update({ completed: true }).eq('id', id);
   reminders = reminders.filter(r => r.id !== id);
   renderReminders();
 }
@@ -625,7 +625,7 @@ function renderMore() {
 }
 async function saveMyIbo() {
   const amway_id = document.getElementById('my-ibo').value.trim();
-  const { error } = await supabase.from('profiles').update({ amway_id }).eq('id', currentUser.id);
+  const { error } = await sb.from('profiles').update({ amway_id }).eq('id', currentUser.id);
   if (error) { alert(error.message); return; }
   myIbo = amway_id;
   alert('IBO number saved.');
@@ -646,7 +646,7 @@ async function sendFeedback() {
       if (screenshot_url.length > 500000) screenshot_url = null;
     }
   } catch (e) { screenshot_url = null; }
-  const { error } = await supabase.from('feedback').insert({ user_id: currentUser.id, message, screenshot_url });
+  const { error } = await sb.from('feedback').insert({ user_id: currentUser.id, message, screenshot_url });
   showView('chat');
   await addMessage(error ? 'Feedback failed: ' + error.message : 'Feedback saved. Thank you.');
 }
@@ -695,7 +695,7 @@ async function importCsv(text) {
     const cells = (lines[i].match(/(".*?"|[^",]+)(?=\s*,|\s*$)/g) || []).map(c => c.replace(/^"|"$/g, '').trim());
     const name = cells[idx('name')] || cells[0];
     if (!name || findByName(name)) continue;
-    const { data, error } = await supabase.from('customers').insert({
+    const { data, error } = await sb.from('customers').insert({
       user_id: currentUser.id, name,
       phone: cells[idx('phone')] || '',
       email: cells[idx('email')] || '',
@@ -718,7 +718,7 @@ async function importVcf(text) {
     if (findByName(name)) continue;
     const phone = (card.match(/TEL[^:]*:([^\r\n]+)/i) || [])[1] || '';
     const email = (card.match(/EMAIL[^:]*:([^\r\n]+)/i) || [])[1] || '';
-    const { data, error } = await supabase.from('customers').insert({
+    const { data, error } = await sb.from('customers').insert({
       user_id: currentUser.id, name, phone: phone.trim(), email: email.trim(), preferred: phone ? 'Call' : 'Text'
     }).select().single();
     if (!error && data) { customers.push(data); added++; }
