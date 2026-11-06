@@ -57,6 +57,10 @@ header { background:rgba(247,247,248,.92); backdrop-filter:blur(12px); border-bo
 .field { width:100%; border:1px solid var(--border); border-radius:12px; padding:12px 14px; font-size:1rem; margin-top:8px; }
 label { display:block; font-size:.8rem; color:var(--dim); margin-top:12px; }
 .guide-highlight { outline:3px solid #38539A; outline-offset:4px; border-radius:12px; }
+.heard-label { font-size:.72rem; letter-spacing:.04em; text-transform:uppercase; color:#38539A; font-weight:700; margin-bottom:6px; }
+.heard-actions { display:flex; gap:8px; margin-top:10px; }
+.heard-actions .btn { width:auto; margin:0; padding:8px 16px; font-size:.9rem; }
+
 </style>
 </head>
 <body>
@@ -367,8 +371,15 @@ async function sendMessage() {
   input.value = '';
   await addMessage(esc(text), 'user', true);
   try {
+    if (pending && pending.kind === 'confirm') {
+      const yes = /^(yes|y|confirm|ok|okay|go)$/i.test(text);
+      const no = /^(no|n|cancel|stop)$/i.test(text);
+      if (yes || no) { await confirmHeard(yes, false); return; }
+      pending = null;
+      await addMessage('Cancelled that. Reading this as a new request.');
+    }
     if (pending && text.toLowerCase() !== 'cancel') { await pending.handle(text); return; }
-    if (text.toLowerCase() === 'cancel') { pending = null; await addMessage('Cancelled.'); return; }
+    if (text.toLowerCase() === 'cancel') { pending = null; await addMessage('Cancelled. Nothing was saved.'); return; }
     const cmd = registry.find(c => c.match(text));
     if (cmd) await cmd.run(text);
     else {
@@ -380,6 +391,25 @@ async function sendMessage() {
     await addMessage('Something went wrong: ' + esc(err.message));
   }
 }
+async function askConfirm(summaryHtml, action) {
+  await addMessage(
+    '<div class="heard-label">I heard this</div>' + summaryHtml +
+    '<div class="heard-actions"><button type="button" class="btn heard-yes" onclick="confirmHeard(true, true)">Confirm</button>' +
+    '<button type="button" class="btn ghost heard-no" onclick="confirmHeard(false, true)">Cancel</button></div>' +
+    '<div style="color:var(--dim);font-size:.78rem;margin-top:8px;">Or type confirm or cancel.</div>',
+    'bot', true);
+  pending = { kind: 'confirm', run: action };
+}
+async function confirmHeard(ok, fromButton) {
+  if (!pending || pending.kind !== 'confirm') return;
+  const job = pending;
+  pending = null;
+  document.querySelectorAll('.heard-yes, .heard-no').forEach(b => { b.disabled = true; b.style.opacity = '.45'; });
+  if (fromButton) await addMessage(ok ? 'Confirm' : 'Cancel', 'user');
+  if (!ok) { await addMessage('Cancelled. Nothing was saved.'); return; }
+  try { await job.run(); }
+  catch (err) { await addMessage('Something went wrong: ' + esc(err.message)); }
+}
 
 const registry = [];
 function register(cmd) { registry.push(cmd); }
@@ -387,7 +417,7 @@ function register(cmd) { registry.push(cmd); }
 register({
   id: 'help',
   match: t => /^(help|\?)$/i.test(t.trim()),
-  run: async () => addMessage('Commands:<br>• Add customer Jane Doe. Met at school.<br>• Called Jane Doe about samples<br>• Set reminder to call Jane on Tuesday<br>• Who needs attention<br>• Suggest products for Jane<br>• Find Jane<br>• Share with name@email.com<br>• Share with IBO 123456<br>Type skip when a note is optional. Type cancel to stop.', 'bot', true)
+  run: async () => addMessage('Commands:<br>• Add customer Jane Doe. Met at school.<br>• Called Jane Doe about samples<br>• Set reminder to call Jane on Tuesday<br>• Who needs attention<br>• Suggest products for Jane<br>• Find Jane<br>• Share with name@email.com<br>• Share with IBO 123456<br>I will show what I heard and wait for Confirm before saving. Type skip when a note is optional. Type cancel to stop.', 'bot', true)
 });
 
 register({
@@ -403,9 +433,11 @@ register({
     const cleaned = text.replace(/^(suggest\s+products?\s*(for)?|products?\s+for)\s*/i, '').trim();
     const customer = findInText(cleaned) || findByName(cleaned);
     if (!customer) { await addMessage('Suggest products for which customer?'); pending = { handle: async n => { pending = null; registry.find(c => c.id === 'suggest').run('suggest products for ' + n); } }; return; }
-    const buys = activities.filter(a => a.customer_id === customer.id && /purchase|sample/i.test(a.type));
-    const history = buys.map(b => b.notes).filter(Boolean).join(', ') || 'no purchases logged';
-    await addMessage(`I don't have a live product catalog yet. Based on what you've logged for <strong>${esc(customer.name)}</strong> (${esc(history)}), ask them what they're using up and offer a sample of something adjacent. Paste a recent order if you want a tighter suggestion.`, 'bot', true);
+    await askConfirm('Suggest products for <strong>' + esc(customer.name) + '</strong>.', async () => {
+      const buys = activities.filter(a => a.customer_id === customer.id && /purchase|sample/i.test(a.type));
+      const history = buys.map(b => b.notes).filter(Boolean).join(', ') || 'no purchases logged';
+      await addMessage(`I don't have a live product catalog yet. Based on what you've logged for <strong>${esc(customer.name)}</strong> (${esc(history)}), ask them what they're using up and offer a sample of something adjacent. Paste a recent order if you want a tighter suggestion.`, 'bot', true);
+    });
   }
 });
 
@@ -415,7 +447,7 @@ register({
   run: async (text) => {
     const name = text.replace(/^(show|find|search)\s+/i, '').trim();
     const match = findByName(name) || findInText(name);
-    if (match) openCard(match.id);
+    if (match) await askConfirm('Open the card for <strong>' + esc(match.name) + '</strong>.', async () => openCard(match.id));
     else await addMessage('No customer found with that name.');
   }
 });
@@ -429,9 +461,11 @@ register({
     const { data, error } = await sb.rpc('find_ibo', { lookup });
     if (error) { await addMessage('Sharing is not ready yet. Run the find_ibo SQL in Supabase, then try again.'); return; }
     if (!data) { await addMessage('No IBO found for ' + lookup + '. They need an account, and an IBO number only works after they save it in More.'); return; }
-    const { error: insErr } = await sb.from('shares').insert({ owner_id: currentUser.id, recipient_id: data, scope: 'all' });
-    if (insErr) { await addMessage('Share failed: ' + insErr.message); return; }
-    await addMessage('Shared your customer circle with ' + lookup + '.');
+    await askConfirm('Share your whole customer circle with <strong>' + esc(lookup) + '</strong>.', async () => {
+      const { error: insErr } = await sb.from('shares').insert({ owner_id: currentUser.id, recipient_id: data, scope: 'all' });
+      if (insErr) { await addMessage('Share failed: ' + insErr.message); return; }
+      await addMessage('Shared your customer circle with ' + lookup + '.');
+    });
   }
 });
 
@@ -461,10 +495,16 @@ register({
     const name = cleaned.split(/[.\n]/)[0].replace(/\s+/g, ' ').trim();
     if (!name) { await addMessage("I need a name."); return; }
     const row = { user_id: currentUser.id, name, preferred, how_met: howMet, sponsor_id: sponsorId, phone: '', email: '', notes: '' };
-    const { data, error } = await sb.from('customers').insert(row).select().single();
-    if (error) { await addMessage('Could not add customer: ' + error.message); return; }
-    customers.push(data);
-    await addMessage(`Added <strong>${esc(data.name)}</strong>${howMet ? ' (met at ' + esc(howMet) + ')' : ''}. Preferred: ${esc(preferred)}.`, 'bot', true);
+    await askConfirm(
+      'Add customer <strong>' + esc(name) + '</strong><br>Met: ' + esc(howMet || '—') + '<br>Preferred: ' + esc(preferred) + (sponsorId ? '<br>Sponsor linked' : ''),
+      async () => {
+        const { data, error } = await sb.from('customers').insert(row).select().single();
+        if (error) { await addMessage('Could not add customer: ' + error.message); return; }
+        customers.push(data);
+        await addMessage('Added <strong>' + esc(data.name) + '</strong>' + (howMet ? ' (met at ' + esc(howMet) + ')' : '') + '. Preferred: ' + esc(preferred) + '.', 'bot', true);
+        renderCustomers();
+      }
+    );
   }
 });
 
@@ -491,14 +531,18 @@ function cleanNotes(text, name) {
   return notes;
 }
 async function finishActivity(customer, type, notes) {
-  const row = { user_id: currentUser.id, customer_id: customer.id, date: today(), type, notes: notes || '' };
-  const { data, error } = await sb.from('activities').insert(row).select().single();
-  if (error) { await addMessage('Could not log activity: ' + error.message); return; }
-  activities.unshift(data);
-  await sb.from('customers').update({ last_contact: today() }).eq('id', customer.id);
-  customer.last_contact = today();
-  pending = null;
-  await addMessage(`Logged <strong>${esc(type)}</strong> for ${esc(customer.name)}${notes ? ': ' + esc(notes) : ''}.`, 'bot', true);
+  await askConfirm(
+    'Log <strong>' + esc(type) + '</strong> for <strong>' + esc(customer.name) + '</strong><br>Note: ' + esc(notes || '—'),
+    async () => {
+      const row = { user_id: currentUser.id, customer_id: customer.id, date: today(), type, notes: notes || '' };
+      const { data, error } = await sb.from('activities').insert(row).select().single();
+      if (error) { await addMessage('Could not log activity: ' + error.message); return; }
+      activities.unshift(data);
+      await sb.from('customers').update({ last_contact: today() }).eq('id', customer.id);
+      customer.last_contact = today();
+      await addMessage('Logged <strong>' + esc(type) + '</strong> for ' + esc(customer.name) + (notes ? ': ' + esc(notes) : '') + '.', 'bot', true);
+    }
+  );
 }
 
 register({
@@ -556,12 +600,18 @@ register({
     }
     const when = parseWhen(cleaned);
     const action = cleaned.replace(new RegExp(customer.name, 'i'), '').replace(/\b(on|in|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week)\b/ig, '').replace(/\s+/g, ' ').trim();
-    const { data, error } = await sb.from('reminders').insert({
-      user_id: currentUser.id, customer_id: customer.id, reminder_date: when, action: action || 'Check in'
-    }).select().single();
-    if (error) { await addMessage('Could not save reminder: ' + error.message); return; }
-    reminders.push(data);
-    await addMessage(`Reminder set for <strong>${esc(customer.name)}</strong> on ${formatDate(when)}.`, 'bot', true);
+    await askConfirm(
+      'Set a reminder for <strong>' + esc(customer.name) + '</strong><br>When: ' + esc(formatDate(when)) + '<br>Action: ' + esc(action || 'Check in'),
+      async () => {
+        const { data, error } = await sb.from('reminders').insert({
+          user_id: currentUser.id, customer_id: customer.id, reminder_date: when, action: action || 'Check in'
+        }).select().single();
+        if (error) { await addMessage('Could not save reminder: ' + error.message); return; }
+        reminders.push(data);
+        await addMessage('Reminder set for <strong>' + esc(customer.name) + '</strong> on ' + formatDate(when) + '.', 'bot', true);
+        renderReminders();
+      }
+    );
   }
 });
 
