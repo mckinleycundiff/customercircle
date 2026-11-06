@@ -377,7 +377,7 @@ function toggleQuick() {
   document.getElementById('quick-toggle').textContent = quickOpen ? '▼ hide actions' : '▲ show actions';
 }
 function showActivityMenu() {
-  const opts = ['Called', 'Texted', 'Emailed', 'Met with', 'Purchased', 'Sampled', 'Followed up'];
+  const opts = ['Called', 'Texted', 'Emailed', 'Met with', 'Purchased', 'Sampled', 'Followed up', 'Open contact'];
   openModal(`<button class="modal-close" onclick="closeModal()">×</button><h3 style="margin-bottom:12px;">Log activity</h3>` +
     opts.map(o => `<button class="btn ghost" onclick="pickActivity('${o}')">${o}</button>`).join(''));
 }
@@ -446,7 +446,7 @@ function register(cmd) { registry.push(cmd); }
 register({
   id: 'help',
   match: t => /^(help|\?)$/i.test(t.trim()),
-  run: async () => addMessage('Commands:<br>• Add customer Jane Doe. Met at school.<br>• Called Jane Doe about samples<br>• Set reminder to call Jane on Tuesday<br>• Who needs attention<br>• Suggest products for Jane<br>• Find Jane<br>• Share with name@email.com<br>• Share with IBO 123456<br>I will show what I heard and wait for Confirm before saving. Type skip when a note is optional. Type cancel to stop.', 'bot', true)
+  run: async () => addMessage('Commands:<br>• Add customer Jane Doe. Met at school.<br>• Called Jane Doe about samples<br>• Set reminder to call Jane on Tuesday<br>• Who needs attention<br>• Suggest products for Jane<br>• Find Jane<br>• Share with name@email.com<br>• Share with IBO 123456<br>Open contact Jane Doe<br>I will show what I heard and wait for Confirm before saving. Type skip when a note is optional. Type cancel to stop.', 'bot', true)
 });
 
 register({
@@ -467,6 +467,25 @@ register({
       const history = buys.map(b => b.notes).filter(Boolean).join(', ') || 'no purchases logged';
       await addMessage(`I don't have a live product catalog yet. Based on what you've logged for <strong>${esc(customer.name)}</strong> (${esc(history)}), ask them what they're using up and offer a sample of something adjacent. Paste a recent order if you want a tighter suggestion.`, 'bot', true);
     });
+  }
+});
+
+
+register({
+  id: 'open-contact',
+  match: t => /^open\s+contact\b/i.test(t),
+  run: async (text) => {
+    const name = text.replace(/^open\s+contact\s*/i, '').trim();
+    if (!name) {
+      await addMessage('Which customer?');
+      pending = { handle: async n => { pending = null; await registry.find(c => c.id === 'open-contact').run('Open contact ' + n); } };
+      return;
+    }
+    const match = findByName(name) || findInText(name);
+    if (!match) { await addMessage('No customer found with that name.'); return; }
+    showView('customers');
+    openCard(match.id);
+    await addMessage('Opened <strong>' + esc(match.name) + '</strong>.', 'bot', true);
   }
 });
 
@@ -733,15 +752,85 @@ async function sendFeedback() {
 function openCard(id) {
   const c = customerById(id);
   if (!c) return;
-  const acts = activities.filter(a => a.customer_id === id).slice(0, 12);
-  const rows = acts.length ? acts.map(a => `<tr><td>${formatDate(a.date)}</td><td>${esc(a.type)}</td><td>${esc(a.notes || '—')}</td></tr>`).join('') : '<tr><td colspan="3">No activity yet</td></tr>';
+  const acts = activities.filter(a => a.customer_id === id).slice(0, 20);
+  const rows = acts.length ? acts.map(a => `<tr onclick="editActivity('${a.id}')" style="cursor:pointer;"><td>${formatDate(a.date)}</td><td>${esc(a.type)}</td><td>${esc(a.notes || '—')}</td></tr>`).join('') : '<tr><td colspan="3">No activity yet</td></tr>';
   const phone = c.phone ? `<a href="tel:${esc(c.phone)}">Call</a> · <a href="sms:${esc(c.phone)}">Text</a>` : '';
   openModal(`<button class="modal-close" onclick="closeModal()">×</button>
     <h2 style="font-size:1.3rem;">${esc(c.name)}</h2>
     <div style="color:var(--dim);font-size:.85rem;margin:6px 0 12px;">Preferred: ${esc(c.preferred || '—')} · Met: ${esc(c.how_met || '—')}${c.amway_id ? ' · Amway ' + esc(c.amway_id) : ''}</div>
     <div style="margin-bottom:10px;">${phone}</div>
-    <table class="history-table"><thead><tr><th>Date</th><th>Activity</th><th>Notes</th></tr></thead><tbody>${rows}</tbody></table>`);
+    <table class="history-table"><thead><tr><th>Date</th><th>Activity</th><th>Notes</th></tr></thead><tbody>${rows}</tbody></table>
+    <div style="color:var(--dim);font-size:.75rem;margin-top:8px;">Tap a row to edit or delete it.</div>`);
 }
+function activityTypes(current) {
+  const types = ['Call', 'Text', 'Email', 'Meeting', 'Purchase', 'Sample', 'Follow-up', 'Note'];
+  if (current && !types.includes(current)) types.unshift(current);
+  return types;
+}
+function editActivity(id) {
+  const a = activities.find(x => x.id === id);
+  if (!a) return;
+  const options = activityTypes(a.type).map(type => `<option${type === a.type ? ' selected' : ''}>${esc(type)}</option>`).join('');
+  openModal(`<button class="modal-close" onclick="closeModal()">×</button>
+    <h3>Edit activity</h3>
+    <label>Date</label><input id="edit-date" class="field" type="date" value="${a.date || ''}">
+    <label>Activity</label><select id="edit-type" class="field">${options}</select>
+    <label>Note</label><textarea id="edit-note" class="field" rows="3">${esc(a.notes || '')}</textarea>
+    <button class="btn" onclick="reviewActivityEdit('${a.id}')">Save</button>
+    <button class="btn ghost" style="color:#b42318;border-color:#b42318;" onclick="reviewActivityDelete('${a.id}')">Delete</button>
+    <button class="btn ghost" onclick="openCard('${a.customer_id}')">Back</button>`);
+}
+function reviewActivityEdit(id) {
+  const a = activities.find(x => x.id === id);
+  if (!a) return;
+  const date = document.getElementById('edit-date').value || a.date;
+  const type = document.getElementById('edit-type').value;
+  const notes = document.getElementById('edit-note').value.trim();
+  const person = customerById(a.customer_id);
+  window._editDraft = { id, date, type, notes, customerId: a.customer_id };
+  openModal(`<button class="modal-close" onclick="closeModal()">×</button>
+    <div class="heard-label">I heard this</div>
+    <div>Update <strong>${esc(person ? person.name : 'this customer')}</strong><br>Date: ${formatDate(date)}<br>Activity: ${esc(type)}<br>Note: ${esc(notes || '—')}</div>
+    <button class="btn" onclick="saveActivityEdit()">Confirm</button>
+    <button class="btn ghost" onclick="editActivity('${id}')">Back</button>`);
+}
+async function saveActivityEdit() {
+  const draft = window._editDraft;
+  if (!draft) return;
+  const { error } = await sb.from('activities').update({ date: draft.date, type: draft.type, notes: draft.notes }).eq('id', draft.id);
+  if (error) { alert(error.message); return; }
+  const a = activities.find(x => x.id === draft.id);
+  if (a) { a.date = draft.date; a.type = draft.type; a.notes = draft.notes; }
+  await refreshLastContact(draft.customerId);
+  openCard(draft.customerId);
+}
+function reviewActivityDelete(id) {
+  const a = activities.find(x => x.id === id);
+  if (!a) return;
+  const person = customerById(a.customer_id);
+  openModal(`<button class="modal-close" onclick="closeModal()">×</button>
+    <div class="heard-label">Delete this?</div>
+    <div><strong>${esc(a.type)}</strong> for ${esc(person ? person.name : 'this customer')} on ${formatDate(a.date)}<br>${esc(a.notes || 'No note')}</div>
+    <button class="btn" style="background:#b42318;" onclick="deleteActivity('${id}')">Confirm delete</button>
+    <button class="btn ghost" onclick="editActivity('${id}')">Back</button>`);
+}
+async function deleteActivity(id) {
+  const a = activities.find(x => x.id === id);
+  if (!a) return;
+  const { error } = await sb.from('activities').delete().eq('id', id);
+  if (error) { alert(error.message); return; }
+  activities = activities.filter(x => x.id !== id);
+  await refreshLastContact(a.customer_id);
+  openCard(a.customer_id);
+}
+async function refreshLastContact(customerId) {
+  const dates = activities.filter(a => a.customer_id === customerId && a.date).map(a => a.date).sort();
+  const last = dates.length ? dates[dates.length - 1] : null;
+  const c = customerById(customerId);
+  if (c) c.last_contact = last;
+  await sb.from('customers').update({ last_contact: last }).eq('id', customerId);
+}
+
 
 function showImportOptions() {
   openModal(`<button class="modal-close" onclick="closeModal()">×</button><h3>Import</h3>
