@@ -79,6 +79,8 @@ label { display:block; font-size:.8rem; color:var(--dim); margin-top:12px; }
 .heard-label { font-size:.72rem; letter-spacing:.04em; text-transform:uppercase; color:#38539A; font-weight:700; margin-bottom:6px; }
 .heard-actions { display:flex; gap:8px; margin-top:10px; }
 .heard-actions .btn { width:auto; margin:0; padding:8px 16px; font-size:.9rem; }
+.plan-row { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; padding:8px 0; border-bottom:1px solid var(--border); }
+.plan-x { border:none; background:none; color:#8e8e93; font-size:1.15rem; line-height:1; cursor:pointer; width:28px; flex-shrink:0; }
 .thinking { display:flex; gap:5px; align-items:center; min-width:54px; }
 .thinking span { width:7px; height:7px; border-radius:50%; background:#8e8e93; animation:dot 1s infinite ease-in-out; }
 .thinking span:nth-child(2) { animation-delay:.15s; }
@@ -161,7 +163,7 @@ body.in #app { display:flex; }
     <div class="chat-container" id="chat">
       <div class="message bot">Welcome back McKinley</div>
     </div>
-    <div id="app-version">Version beta 1.10</div>
+    <div id="app-version">Version beta 1.11</div>
     <div class="quick-actions" id="quick-actions">
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Add customer '">+ Customer</button>
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Called '">Log activity</button>
@@ -542,13 +544,23 @@ async function sendMessage() {
     }
     if (pending && text.toLowerCase() !== 'cancel') { await pending.handle(text); return; }
     if (text.toLowerCase() === 'cancel') { pending = null; await addMessage('Cancelled. Nothing was saved.'); return; }
-    const cmd = registry.find(c => c.match(text));
-    if (cmd) await cmd.run(text);
-    else {
-      const person = findByName(text);
-      if (person) openCard(person.id);
-      else await addMessage("Try Add customer, Called, Set reminder, or Who needs attention. Type help for the list.");
+    const clauses = splitClauses(text);
+    const plans = clauses.map(planClause);
+    if (clauses.length > 1 && plans.every(Boolean)) { await askPlan(plans); return; }
+    const cmd = clauses.length === 1 ? registry.find(c => c.match(text)) : null;
+    if (cmd) { await cmd.run(text); return; }
+    const words = text.trim().split(/\s+/).length;
+    if (words >= 6) {
+      const grok = await interpretWithGrok(text);
+      if (grok.error) { await addMessage(esc(grok.error)); return; }
+      const fromGrok = plansFromActions(grok.actions || []);
+      if (!fromGrok || !fromGrok.length) { await addMessage("I couldn't turn that into actions. Try one command at a time."); return; }
+      await askPlan(fromGrok);
+      return;
     }
+    const person = findByName(text);
+    if (person) openCard(person.id);
+    else await addMessage("Try Add customer, Called, Set reminder, or Who needs attention. A sentence can include more than one. Type help for the list.");
   } catch (err) {
     await addMessage('Something went wrong: ' + esc(err.message));
   } finally {
@@ -577,13 +589,166 @@ async function confirmHeard(ok, fromButton) {
   finally { hideThinking(); }
 }
 
+
+function splitClauses(text) {
+  const lead = /^(add\b|called\b|texted\b|emailed\b|met with\b|purchased\b|bought\b|sampled\b|followed up\b|follow-up\b|log\b|remind\b|set reminder\b|check in\b|open contact\b|find\b|search\b|show\b|share with\b|suggest\b|who needs\b)/i;
+  const raw = text.split(/\s*(?:\.|;|\n+|\bthen\b)\s*/i).map(s => s.trim()).filter(Boolean);
+  const joined = [];
+  raw.forEach(part => {
+    if (joined.length && !lead.test(part)) joined[joined.length - 1] += '. ' + part;
+    else joined.push(part);
+  });
+  const out = [];
+  joined.forEach(part => {
+    const bits = part.split(/\s+\band\b\s+/i);
+    let current = bits[0];
+    for (let i = 1; i < bits.length; i++) {
+      if (lead.test(bits[i])) { out.push(current.trim()); current = bits[i]; }
+      else current += ' and ' + bits[i];
+    }
+    if (current.trim()) out.push(current.trim());
+  });
+  return out;
+}
+function planAdd(text) {
+  if (!/^(add\s+customer|add)\b/i.test(text)) return null;
+  let cleaned = text.replace(/^(add\s+customer|add)\s+/i, '').trim();
+  if (!cleaned) return null;
+  let preferred = 'Text';
+  const pref = cleaned.match(/primary\s+contact\s+(call|text|email|app)|preferred\s+(call|text|email|app)/i);
+  if (pref) { preferred = (pref[1] || pref[2]); preferred = preferred[0].toUpperCase() + preferred.slice(1).toLowerCase(); cleaned = cleaned.replace(pref[0], ''); }
+  let howMet = '';
+  const met = cleaned.match(/met\s+(?:at|through|via|from)\s+(.+?)(?:\.|$)/i);
+  if (met) { howMet = met[1].trim(); cleaned = cleaned.replace(met[0], ''); }
+  const name = cleaned.split(/[.\n]/)[0].replace(/\s+/g, ' ').trim();
+  if (!name) return null;
+  const row = { user_id: currentUser.id, name, preferred, how_met: howMet, sponsor_id: null, phone: '', email: '', notes: '' };
+  return {
+    summary: 'Add <strong>' + esc(name) + '</strong>' + (howMet ? ' · met ' + esc(howMet) : ''),
+    run: async () => {
+      const { data, error } = await sb.from('customers').insert(row).select().single();
+      if (error) { await addMessage('Could not add customer: ' + error.message); return; }
+      customers.push(data);
+      await addMessage('Added ' + whoLink(data.id, data.name) + (howMet ? ' (met at ' + esc(howMet) + ')' : '') + '.', 'bot', true);
+      renderCustomers();
+    }
+  };
+}
+function planLog(customer, type, notes) {
+  return {
+    summary: 'Log ' + esc(type) + ' for <strong>' + esc(customer.name) + '</strong>' + (notes ? ' · ' + esc(notes) : ''),
+    run: async () => {
+      const row = { user_id: currentUser.id, customer_id: customer.id, date: today(), type, notes: notes || '' };
+      const { data, error } = await sb.from('activities').insert(row).select().single();
+      if (error) { await addMessage('Could not log activity: ' + error.message); return; }
+      activities.unshift(data);
+      await sb.from('customers').update({ last_contact: today() }).eq('id', customer.id);
+      customer.last_contact = today();
+      await addMessage('Logged ' + whoLink(customer.id, type) + ' for ' + whoLink(customer.id, customer.name) + (notes ? ': ' + esc(notes) : '') + '.', 'bot', true);
+    }
+  };
+}
+function planReminder(customer, when, action) {
+  return {
+    summary: 'Remind <strong>' + esc(customer.name) + '</strong> on ' + esc(formatDate(when)) + (action ? ' · ' + esc(action) : ''),
+    run: async () => {
+      const { data, error } = await sb.from('reminders').insert({
+        user_id: currentUser.id, customer_id: customer.id, reminder_date: when, action: action || 'Check in'
+      }).select().single();
+      if (error) { await addMessage('Could not save reminder: ' + error.message); return; }
+      reminders.push(data);
+      await addMessage('Reminder set for ' + whoLink(customer.id, customer.name) + ' on ' + formatDate(when) + '.', 'bot', true);
+      renderReminders();
+    }
+  };
+}
+function planClause(text) {
+  const add = planAdd(text);
+  if (add) return add;
+  if (/^(log\b|activity\b|called\b|texted\b|emailed\b|met with\b|purchased\b|bought\b|sampled\b|followed up\b|follow-up\b)/i.test(text)) {
+    const parsed = extractActivity(text);
+    if (!parsed.type) return null;
+    const customer = findInText(parsed.rest);
+    if (!customer) return null;
+    return planLog(customer, parsed.type, cleanNotes(parsed.rest, customer.name));
+  }
+  if (/\b(remind|reminder|check in)\b/i.test(text)) {
+    const cleaned = text.replace(/^(set\s+)?(reminder|remind me|check in)\s*(to|with|about|for)?\s*/i, '').trim();
+    const customer = findInText(cleaned);
+    if (!customer) return null;
+    const action = cleaned.replace(new RegExp(customer.name, 'i'), '').replace(/\b(on|in|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week)\b/ig, '').replace(/\s+/g, ' ').trim();
+    return planReminder(customer, parseWhen(cleaned), action);
+  }
+  if (/^open\s+contact\b/i.test(text)) {
+    const match = findByName(text.replace(/^open\s+contact\s*/i, '')) || findInText(text);
+    if (!match) return null;
+    return { summary: 'Open <strong>' + esc(match.name) + '</strong>', run: async () => { showView('customers'); openCard(match.id); await addMessage('Opened ' + whoLink(match.id, match.name) + '.', 'bot', true); } };
+  }
+  return null;
+}
+function normType(value) {
+  const key = String(value || '').toLowerCase().replace(/\s+/g, '');
+  return { call:'Call', text:'Text', email:'Email', meeting:'Meeting', purchase:'Purchase', sample:'Sample', 'follow-up':'Follow-up', followup:'Follow-up', note:'Note' }[key] || 'Note';
+}
+function plansFromActions(actions) {
+  if (!Array.isArray(actions) || !actions.length) return null;
+  const plans = [];
+  for (const a of actions) {
+    if (a.kind === 'add-customer' && a.name) { const plan = planAdd('Add customer ' + a.name + (a.how_met ? '. Met at ' + a.how_met : '')); if (!plan) return null; plans.push(plan); continue; }
+    const customer = findByName(a.name || '') || findInText(a.name || '');
+    if (!customer) return null;
+    if (a.kind === 'log-activity') plans.push(planLog(customer, normType(a.type), a.notes || ''));
+    else if (a.kind === 'reminder') plans.push(planReminder(customer, parseWhen(a.when || ''), a.action || ''));
+    else if (a.kind === 'open-contact') plans.push({ summary: 'Open <strong>' + esc(customer.name) + '</strong>', run: async () => { showView('customers'); openCard(customer.id); } });
+    else return null;
+  }
+  return plans;
+}
+let planItems = [];
+async function askPlan(items) {
+  planItems = items.map((item, i) => ({ ...item, i, on: true }));
+  await addMessage(
+    '<div class="heard-label">I heard this</div>' + planItems.map(item =>
+      '<div class="plan-row" id="plan-' + item.i + '"><div>' + item.summary + '</div><button type="button" class="plan-x" onclick="dropPlan(' + item.i + ')" aria-label="Drop this">×</button></div>'
+    ).join('') +
+    '<div class="heard-actions"><button type="button" class="btn heard-yes" onclick="confirmHeard(true, true)">Confirm</button>' +
+    '<button type="button" class="btn ghost heard-no" onclick="confirmHeard(false, true)">Cancel</button></div>' +
+    '<div style="color:var(--dim);font-size:.78rem;margin-top:8px;">Drop a line with ×. Or type confirm or cancel.</div>',
+    'bot', true);
+  pending = { kind: 'confirm', run: async () => {
+    const chosen = planItems.filter(item => item.on);
+    if (!chosen.length) { await addMessage('Nothing left to save.'); return; }
+    for (const item of chosen) await item.run();
+  }};
+}
+function dropPlan(i) {
+  const item = planItems.find(x => x.i === i);
+  if (item) item.on = false;
+  const row = document.getElementById('plan-' + i);
+  if (row) row.remove();
+}
+async function interpretWithGrok(text) {
+  const { data, error } = await sb.functions.invoke('interpret', {
+    body: { text: text.slice(0, 1000), customers: customers.map(c => c.name) }
+  });
+  if (error) {
+    let message = 'Grok is not connected yet. Deploy the interpret function, then try the sentence again.';
+    try {
+      const body = await error.context.json();
+      if (body && body.message) message = body.message;
+    } catch (e) {}
+    return { error: message };
+  }
+  return data || {};
+}
+
 const registry = [];
 function register(cmd) { registry.push(cmd); }
 
 register({
   id: 'help',
   match: t => /^(help|\?)$/i.test(t.trim()),
-  run: async () => addMessage('Commands:<br>• Add customer Jane Doe. Met at school.<br>• Called Jane Doe about samples<br>• Set reminder to call Jane on Tuesday<br>• Who needs attention<br>• Suggest products for Jane<br>• Find Jane<br>• Share with name@email.com<br>• Share with IBO 123456<br>Open contact Jane Doe<br>I will show what I heard and wait for Confirm before saving. Type skip when a note is optional. Type cancel to stop.', 'bot', true)
+  run: async () => addMessage('Commands:<br>• Add customer Jane Doe. Met at school.<br>• Called Jane Doe about samples<br>• Set reminder to call Jane on Tuesday<br>• Who needs attention<br>• Suggest products for Jane<br>• Find Jane<br>• Share with name@email.com<br>• Share with IBO 123456<br>Open contact Jane Doe<br>You can put more than one in a sentence: Called Jane about samples. Remind me Friday.<br>I will show what I heard and wait for Confirm before saving. Type skip when a note is optional. Type cancel to stop.', 'bot', true)
 });
 
 register({
