@@ -48,6 +48,8 @@ header { background:rgba(247,247,248,.92); backdrop-filter:blur(12px); border-bo
 .message.user { align-self:flex-end; background:var(--accent); color:#fff; border-bottom-right-radius:6px; }
 .message.bot { align-self:flex-start; background:#fff; border:1px solid var(--border); border-bottom-left-radius:6px; }
 .message.bot strong { color:var(--accent); }
+.message.bot a.who { color:var(--accent); font-weight:650; text-decoration:none; cursor:pointer; }
+.message.bot a.who:hover { text-decoration:underline; }
 .quick-actions { display:flex; flex-wrap:wrap; gap:8px; padding:8px 16px; flex-shrink:0; }
 .chip { background:#fff; border:1px solid var(--border); border-radius:20px; padding:8px 14px; font-size:.82rem; color:var(--accent); cursor:pointer; box-shadow:var(--shadow); }
 .input-area { display:flex; gap:10px; padding:12px 16px 24px; border-top:1px solid var(--border); flex-shrink:0; background:rgba(247,247,248,.96); }
@@ -159,7 +161,7 @@ body.in #app { display:flex; }
     <div class="chat-container" id="chat">
       <div class="message bot">Welcome back McKinley</div>
     </div>
-    <div id="app-version">Version beta 1.8</div>
+    <div id="app-version">Version beta 1.9</div>
     <div class="quick-actions" id="quick-actions">
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Add customer '">+ Customer</button>
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Called '">Log activity</button>
@@ -344,6 +346,9 @@ async function loadData() {
 }
 
 function customerById(id) { return customers.find(c => c.id === id); }
+function whoLink(id, label) {
+  return '<a class="who" href="#" onclick="event.preventDefault();openCard(\'' + id + '\')">' + esc(label) + '</a>';
+}
 function findInText(text) {
   if (!text) return null;
   const lower = text.toLowerCase();
@@ -599,10 +604,10 @@ register({
     const cleaned = text.replace(/^(suggest\s+products?\s*(for)?|products?\s+for)\s*/i, '').trim();
     const customer = findInText(cleaned) || findByName(cleaned);
     if (!customer) { await addMessage('Suggest products for which customer?'); pending = { handle: async n => { pending = null; registry.find(c => c.id === 'suggest').run('suggest products for ' + n); } }; return; }
-    await askConfirm('Suggest products for <strong>' + esc(customer.name) + '</strong>.', async () => {
+    await askConfirm('Suggest products for ' + whoLink(customer.id, customer.name) + '.', async () => {
       const buys = activities.filter(a => a.customer_id === customer.id && /purchase|sample/i.test(a.type));
       const history = buys.map(b => b.notes).filter(Boolean).join(', ') || 'no purchases logged';
-      await addMessage(`I don't have a live product catalog yet. Based on what you've logged for <strong>${esc(customer.name)}</strong> (${esc(history)}), ask them what they're using up and offer a sample of something adjacent. Paste a recent order if you want a tighter suggestion.`, 'bot', true);
+      await addMessage('I don\'t have a live product catalog yet. Based on what you\'ve logged for ' + whoLink(customer.id, customer.name) + ' (' + esc(history) + '), ask them what they\'re using up and offer a sample of something adjacent. Paste a recent order if you want a tighter suggestion.', 'bot', true);
     });
   }
 });
@@ -622,7 +627,7 @@ register({
     if (!match) { await addMessage('No customer found with that name.'); return; }
     showView('customers');
     openCard(match.id);
-    await addMessage('Opened <strong>' + esc(match.name) + '</strong>.', 'bot', true);
+    await addMessage('Opened ' + whoLink(match.id, match.name) + '.', 'bot', true);
   }
 });
 
@@ -632,7 +637,7 @@ register({
   run: async (text) => {
     const name = text.replace(/^(show|find|search)\s+/i, '').trim();
     const match = findByName(name) || findInText(name);
-    if (match) await askConfirm('Open the card for <strong>' + esc(match.name) + '</strong>.', async () => openCard(match.id));
+    if (match) await askConfirm('Open the card for ' + whoLink(match.id, match.name) + '.', async () => openCard(match.id));
     else await addMessage('No customer found with that name.');
   }
 });
@@ -686,7 +691,7 @@ register({
         const { data, error } = await sb.from('customers').insert(row).select().single();
         if (error) { await addMessage('Could not add customer: ' + error.message); return; }
         customers.push(data);
-        await addMessage('Added <strong>' + esc(data.name) + '</strong>' + (howMet ? ' (met at ' + esc(howMet) + ')' : '') + '. Preferred: ' + esc(preferred) + '.', 'bot', true);
+        await addMessage('Added ' + whoLink(data.id, data.name) + (howMet ? ' (met at ' + esc(howMet) + ')' : '') + '. Preferred: ' + esc(preferred) + '.', 'bot', true);
         renderCustomers();
       }
     );
@@ -717,7 +722,7 @@ function cleanNotes(text, name) {
 }
 async function finishActivity(customer, type, notes) {
   await askConfirm(
-    'Log <strong>' + esc(type) + '</strong> for <strong>' + esc(customer.name) + '</strong><br>Note: ' + esc(notes || '—'),
+    'Log ' + whoLink(customer.id, type) + ' for ' + whoLink(customer.id, customer.name) + '<br>Note: ' + esc(notes || '—'),
     async () => {
       const row = { user_id: currentUser.id, customer_id: customer.id, date: today(), type, notes: notes || '' };
       const { data, error } = await sb.from('activities').insert(row).select().single();
@@ -725,7 +730,7 @@ async function finishActivity(customer, type, notes) {
       activities.unshift(data);
       await sb.from('customers').update({ last_contact: today() }).eq('id', customer.id);
       customer.last_contact = today();
-      await addMessage('Logged <strong>' + esc(type) + '</strong> for ' + esc(customer.name) + (notes ? ': ' + esc(notes) : '') + '.', 'bot', true);
+      await addMessage('Logged ' + whoLink(customer.id, type) + ' for ' + whoLink(customer.id, customer.name) + (notes ? ': ' + esc(notes) : '') + '.', 'bot', true);
     }
   );
 }
@@ -786,14 +791,14 @@ register({
     const when = parseWhen(cleaned);
     const action = cleaned.replace(new RegExp(customer.name, 'i'), '').replace(/\b(on|in|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week)\b/ig, '').replace(/\s+/g, ' ').trim();
     await askConfirm(
-      'Set a reminder for <strong>' + esc(customer.name) + '</strong><br>When: ' + esc(formatDate(when)) + '<br>Action: ' + esc(action || 'Check in'),
+      'Set a reminder for ' + whoLink(customer.id, customer.name) + '<br>When: ' + esc(formatDate(when)) + '<br>Action: ' + esc(action || 'Check in'),
       async () => {
         const { data, error } = await sb.from('reminders').insert({
           user_id: currentUser.id, customer_id: customer.id, reminder_date: when, action: action || 'Check in'
         }).select().single();
         if (error) { await addMessage('Could not save reminder: ' + error.message); return; }
         reminders.push(data);
-        await addMessage('Reminder set for <strong>' + esc(customer.name) + '</strong> on ' + formatDate(when) + '.', 'bot', true);
+        await addMessage('Reminder set for ' + whoLink(customer.id, customer.name) + ' on ' + formatDate(when) + '.', 'bot', true);
         renderReminders();
       }
     );
