@@ -163,7 +163,7 @@ body.in #app { display:flex; }
     <div class="chat-container" id="chat">
       <div class="message bot">Welcome back McKinley</div>
     </div>
-    <div id="app-version">Version beta 1.11</div>
+    <div id="app-version">Version beta 1.12</div>
     <div class="quick-actions" id="quick-actions">
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Add customer '">+ Customer</button>
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Called '">Log activity</button>
@@ -728,11 +728,11 @@ function dropPlan(i) {
   if (row) row.remove();
 }
 async function interpretWithGrok(text) {
-  const { data, error } = await sb.functions.invoke('interpret', {
+  const { data, error } = await sb.functions.invoke('smooth-function', {
     body: { text: text.slice(0, 1000), customers: customers.map(c => c.name) }
   });
   if (error) {
-    let message = 'Grok is not connected yet. Deploy the interpret function, then try the sentence again.';
+    let message = 'Grok could not read that. Try one command at a time.';
     try {
       const body = await error.context.json();
       if (body && body.message) message = body.message;
