@@ -161,7 +161,7 @@ body.in #app { display:flex; }
     <div class="chat-container" id="chat">
       <div class="message bot">Welcome back McKinley</div>
     </div>
-    <div id="app-version">Version beta 1.9</div>
+    <div id="app-version">Version beta 1.10</div>
     <div class="quick-actions" id="quick-actions">
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Add customer '">+ Customer</button>
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Called '">Log activity</button>
@@ -426,33 +426,29 @@ function openModal(html) {
 const PRODUCTS = [
   {
     name: 'Nutrilite Metabolic Pre & Postbiotic',
-    line: 'A simple gut habit that may support a healthy weight.',
-    price: '$47',
-    blurb: 'Kiwi and purple carrot prebiotics, plus a studied postbiotic. Amway positions it for a healthier gut and body composition when paired with food and movement.',
+    line: 'Help support a healthy weight with a blend of gut-healthy ingredients.',
+    blurb: 'Help support a healthy weight with a blend of gut-healthy ingredients. Nutrilite Metabolic Pre & Postbiotic contains prebiotics, botanicals, B vitamins and an award-winning postbiotic that may help support healthy body composition, a healthy waistline and normal metabolic function.',
     url: 'https://www.amway.com/en_US/Nutrilite%E2%84%A2-Metabolic-Pre-%26-Postbiotic-p-127620',
     img: 'https://www.amway.com/medias/127620-en-US-690px-01?context=bWFzdGVyfGltYWdlc3wyODEwMzN8aW1hZ2UvcG5nfHN5cy1tYXN0ZXIvaW1hZ2VzL2gwYS9oY2IvOTkwMzI3Mjg1MzUzNC8xMjc2MjAtZW4tVVMtNjkwcHgtMDF8MDNjZDZjZGJkYTJhZjcyN2M4ODNmOWE3OWQ2NGQzNDJiMzJhMzMwMGZjNTlkYjdlNTY2NDRhNmFmMmMwMjBmMQ'
   },
   {
     name: 'XS Sparkling Juiced Energy, Pink Grapefruit',
-    line: 'The energy, the fruit, none of the added sugar.',
-    price: '$37',
-    blurb: 'A 12 oz can with 25% real fruit juice, vitamin C, and about the caffeine of a cup of coffee. No added sugar. Easy to hand someone after a meeting.',
+    line: 'All the energy plus 25% real fruit juice, 280% of your daily vitamin C and no added sugar.',
+    blurb: 'All the energy plus 25% real fruit juice, 280% of your daily vitamin C and no added sugar. Contains 25% real fruit juice from concentrate. Made with a blend of premium ingredients, herbs and B vitamins. Contains 114 mg of caffeine, comparable to a 10 oz cup of coffee.',
     url: 'https://www.amway.com/en_US/XS%E2%84%A2-Sparkling-Juiced-Energy-12-oz---Pink-Grapefruit-p-126987',
     img: 'https://www.amway.com/medias/126987-en-US-690px-01?context=bWFzdGVyfGltYWdlc3wyMTM1ODl8aW1hZ2UvcG5nfHN5cy1tYXN0ZXIvaW1hZ2VzL2gwOS9oNWIvOTUzMjMzMTkxNzM0Mi8xMjY5ODctZW4tVVMtNjkwcHgtMDF8ZDIxODVhY2NhMTI2MmU0Yzk2MmYzZTdkNzQ0YWU4ZmQwMTM0ZmJjMDhhZWRlODRhZjU0OWI2MTVkYjEwYTNlYw'
   },
   {
     name: 'Nutrilite Complete Menopause Support',
-    line: 'One small tablet for the symptoms that interrupt the day.',
-    price: '$45',
-    blurb: 'Built around Siberian rhubarb, with vitamin D, vitamin K, and magnesium. Amway says women in their study reported fewer hot flashes, night sweats, and mood swings.',
+    line: 'Helps alleviate common, natural symptoms associated with menopause, like hot flashes, night sweats, and mood swings.',
+    blurb: 'Harnessing the power of clinically proven Siberian rhubarb, Nutrilite Complete Menopause Support helps alleviate common, natural symptoms associated with menopause, like hot flashes, night sweats, and mood swings, plus provides support for bone health.',
     url: 'https://www.amway.com/en_US/Nutrilite%E2%84%A2-Complete-Menopause-Support-p-126154',
     img: 'https://www.amway.com/medias/126154-en-US-690px-01?context=bWFzdGVyfGltYWdlc3wzMTA4Nzl8aW1hZ2UvcG5nfHN5cy1tYXN0ZXIvaW1hZ2VzL2hlZi9oM2YvOTYxNjMxNzA1NTAwNi8xMjYxNTQtZW4tVVMtNjkwcHgtMDF8YTk2ZGU5NmQ5YzI5OTk3YTI1ZTc0NjhkMjA2YzAzMDE5ZGJmYTFkZjk3MTkxNzM1OTNhZmI4YmQ2YzhkNGYzNg'
   },
   {
     name: 'Nutrilite Prostate Health',
-    line: 'Plant support for men who are paying attention.',
-    price: '$46',
-    blurb: 'Saw palmetto, pumpkin seed oil, and nettle root in a softgel. Amway makes it for men 35 and over who want to support normal prostate function.',
+    line: 'Helps men support normal prostate function and urinary flow.',
+    blurb: 'Fueled by plant ingredients grown on our farms and partner farms, Nutrilite Prostate Health helps men support normal prostate function and urinary flow. Vitamin A, saw palmetto, pumpkin seed oil, and nettle root are combined in softgels made to help support men\u2019s health.',
     url: 'https://www.amway.com/en_US/Nutrilite%E2%84%A2-Prostate-Health-p-A8004',
     img: 'https://www.amway.com/medias/A8004-en-US-690px-01?context=bWFzdGVyfGltYWdlc3wzNjE3NjJ8aW1hZ2UvcG5nfHN5cy1tYXN0ZXIvaW1hZ2VzL2g4Ni9oODAvOTY4MTQ2MjAwMTY5NC9BODAwNC1lbi1VUy02OTBweC0wMXw2ZmE5ZTA4ZmEyZmYyYjIxZWM2MTEwMjA2OTk1OGVlZTIzMjlhMTVkNThjYmM0YmFjNGQwZWY5MzJjNDAxNzk4'
   }
@@ -497,8 +493,7 @@ function openProductOfDay() {
       <img src="${p.img}" alt="${esc(p.name)}">
     </a>
     <p style="margin-top:14px;line-height:1.45;">${esc(p.blurb)}</p>
-    <p style="margin-top:8px;font-weight:650;">${esc(p.price)} on Amway</p>
-    <p style="color:var(--dim);font-size:.8rem;margin-top:8px;">Tap the picture to open this product on Amway. A new product appears each day. Not medical advice.</p>
+    <p style="color:var(--dim);font-size:.8rem;margin-top:8px;">Amway's description. Tap the picture to open this product.</p>
     <a class="btn" style="display:block;text-align:center;text-decoration:none;" href="${p.url}" target="_blank" rel="noopener">View on Amway.com</a>`);
 }
 
