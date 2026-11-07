@@ -163,7 +163,7 @@ body.in #app { display:flex; }
     <div class="chat-container" id="chat">
       <div class="message bot">Welcome back McKinley</div>
     </div>
-    <div id="app-version">Version beta 1.12</div>
+    <div id="app-version">Version beta 1.13</div>
     <div class="quick-actions" id="quick-actions">
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Add customer '">+ Customer</button>
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Called '">Log activity</button>
@@ -354,7 +354,22 @@ function whoLink(id, label) {
 function findInText(text) {
   if (!text) return null;
   const lower = text.toLowerCase();
-  return [...customers].sort((a, b) => b.name.length - a.name.length).find(c => lower.includes(c.name.toLowerCase())) || null;
+  const exact = [...customers].sort((a, b) => b.name.length - a.name.length).find(c => lower.includes(c.name.toLowerCase()));
+  if (exact) return exact;
+  const words = lower.match(/[a-z][a-z'-]*/g) || [];
+  const scored = customers.map(c => {
+    const parts = c.name.toLowerCase().split(/\s+/).filter(Boolean);
+    let score = 0;
+    parts.forEach(part => {
+      if (words.includes(part)) score += 2;
+      else if (part.length >= 4 && words.some(w => w.length >= 3 && (part.startsWith(w) || w.startsWith(part)))) score += 1;
+    });
+    return { c, score, need: parts.length };
+  }).filter(s => s.score >= 2 && s.score >= s.need);
+  scored.sort((a, b) => b.score - a.score);
+  if (!scored.length) return null;
+  if (scored.length === 1 || scored[0].score > scored[1].score) return scored[0].c;
+  return null;
 }
 function findByName(name) {
   const n = name.toLowerCase().trim();
@@ -544,21 +559,21 @@ async function sendMessage() {
     }
     if (pending && text.toLowerCase() !== 'cancel') { await pending.handle(text); return; }
     if (text.toLowerCase() === 'cancel') { pending = null; await addMessage('Cancelled. Nothing was saved.'); return; }
-    const clauses = splitClauses(text);
-    const plans = clauses.map(planClause);
-    if (clauses.length > 1 && plans.every(Boolean)) { await askPlan(plans); return; }
-    const cmd = clauses.length === 1 ? registry.find(c => c.match(text)) : null;
-    if (cmd) { await cmd.run(text); return; }
-    const words = text.trim().split(/\s+/).length;
-    if (words >= 6) {
+    const spoken = normalizeUtterance(text);
+    const clauses = splitClauses(spoken);
+    const plans = planSequence(clauses);
+    if (plans && plans.length > 1) { await askPlan(plans); return; }
+    const cmd = clauses.length === 1 ? registry.find(c => c.match(spoken)) : null;
+    if (cmd) { await cmd.run(spoken); return; }
+    const words = spoken.trim().split(/\s+/).length;
+    if (words >= 8) {
       const grok = await interpretWithGrok(text);
-      if (grok.error) { await addMessage(esc(grok.error)); return; }
-      const fromGrok = plansFromActions(grok.actions || []);
-      if (!fromGrok || !fromGrok.length) { await addMessage("I couldn't turn that into actions. Try one command at a time."); return; }
-      await askPlan(fromGrok);
-      return;
+      if (!grok.error) {
+        const fromGrok = plansFromActions(grok.actions || []);
+        if (fromGrok && fromGrok.length) { await askPlan(fromGrok); return; }
+      }
     }
-    const person = findByName(text);
+    const person = findByName(spoken);
     if (person) openCard(person.id);
     else await addMessage("Try Add customer, Called, Set reminder, or Who needs attention. A sentence can include more than one. Type help for the list.");
   } catch (err) {
@@ -590,6 +605,25 @@ async function confirmHeard(ok, fromButton) {
 }
 
 
+function normalizeUtterance(text) {
+  let spoken = text.trim().replace(/^(i|we|just)\s+/i, '');
+  spoken = spoken.replace(/,\s*and\s+(i|we)\s+/gi, '. ');
+  spoken = spoken.replace(/,\s*(?=(i\s+)?(called|texted|emailed|met with|bought|purchased|sampled|followed up|remind|set reminder)\b)/gi, '. ');
+  spoken = spoken.replace(/\s+\band\s+(i|we)\s+/gi, '. ');
+  spoken = spoken.replace(/\s+\band\s+(?=(called|texted|emailed|met with|bought|purchased|sampled|followed up|remind|set reminder)\b)/gi, '. ');
+  return spoken.replace(/\s+/g, ' ').trim();
+}
+function planSequence(clauses) {
+  const plans = [];
+  let last = null;
+  for (const clause of clauses) {
+    const plan = planClause(clause, last);
+    if (!plan) return null;
+    plans.push(plan);
+    if (plan.customer) last = plan.customer;
+  }
+  return plans;
+}
 function splitClauses(text) {
   const lead = /^(add\b|called\b|texted\b|emailed\b|met with\b|purchased\b|bought\b|sampled\b|followed up\b|follow-up\b|log\b|remind\b|set reminder\b|check in\b|open contact\b|find\b|search\b|show\b|share with\b|suggest\b|who needs\b)/i;
   const raw = text.split(/\s*(?:\.|;|\n+|\bthen\b)\s*/i).map(s => s.trim()).filter(Boolean);
@@ -662,7 +696,7 @@ function planReminder(customer, when, action) {
     }
   };
 }
-function planClause(text) {
+function planClause(text, inherited) {
   const add = planAdd(text);
   if (add) return add;
   if (/^(log\b|activity\b|called\b|texted\b|emailed\b|met with\b|purchased\b|bought\b|sampled\b|followed up\b|follow-up\b)/i.test(text)) {
@@ -670,14 +704,18 @@ function planClause(text) {
     if (!parsed.type) return null;
     const customer = findInText(parsed.rest);
     if (!customer) return null;
-    return planLog(customer, parsed.type, cleanNotes(parsed.rest, customer.name));
+    const plan = planLog(customer, parsed.type, cleanNotes(parsed.rest, customer.name));
+    plan.customer = customer;
+    return plan;
   }
   if (/\b(remind|reminder|check in)\b/i.test(text)) {
     const cleaned = text.replace(/^(set\s+)?(reminder|remind me|check in)\s*(to|with|about|for)?\s*/i, '').trim();
-    const customer = findInText(cleaned);
+    const customer = findInText(cleaned) || inherited || null;
     if (!customer) return null;
-    const action = cleaned.replace(new RegExp(customer.name, 'i'), '').replace(/\b(on|in|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week)\b/ig, '').replace(/\s+/g, ' ').trim();
-    return planReminder(customer, parseWhen(cleaned), action);
+    const action = cleaned.replace(new RegExp(customer.name, 'i'), '').replace(/\b(on|in|tomorrow|today|me|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week)\b/ig, '').replace(/\s+/g, ' ').trim();
+    const plan = planReminder(customer, parseWhen(cleaned), action);
+    plan.customer = customer;
+    return plan;
   }
   if (/^open\s+contact\b/i.test(text)) {
     const match = findByName(text.replace(/^open\s+contact\s*/i, '')) || findInText(text);
@@ -875,8 +913,13 @@ function extractActivity(text) {
   return { type, rest: cleaned };
 }
 function cleanNotes(text, name) {
-  let notes = text.replace(new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'), ' ');
-  notes = notes.replace(/^\s*(with|for|to|about)\s+/i, '').replace(/^[\s,.\-:–—]+|[\s,.\-:–—]+$/g, '').replace(/\s+/g, ' ').trim();
+  const parts = String(name || '').toLowerCase().split(/\s+/).filter(Boolean);
+  const kept = String(text || '').split(/\s+/).filter(word => {
+    const w = word.toLowerCase().replace(/[^a-z'-]/g, '');
+    if (!w || /^(with|for|to|about|and)$/i.test(w)) return false;
+    return !parts.some(part => w === part || (w.length >= 3 && part.length >= 4 && w.length <= part.length && part.slice(0, 3) === w.slice(0, 3)));
+  });
+  const notes = kept.join(' ').replace(/[.,;:]+$/g, '').trim();
   if (/^(ed|ing|s|a|the)$/i.test(notes) || notes.length < 2) return '';
   return notes;
 }
