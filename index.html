@@ -80,6 +80,7 @@ label { display:block; font-size:.8rem; color:var(--dim); margin-top:12px; }
 .heard-actions { display:flex; gap:8px; margin-top:10px; }
 .heard-actions .btn { width:auto; margin:0; padding:8px 16px; font-size:.9rem; }
 .plan-row { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; padding:8px 0; border-bottom:1px solid var(--border); }
+.who-pick { display:block; width:100%; margin-top:6px; font:inherit; font-size:16px; color:inherit; background:#fff; border:1px solid var(--border); border-radius:10px; padding:8px; }
 .plan-x { border:none; background:none; color:#8e8e93; font-size:1.15rem; line-height:1; cursor:pointer; width:28px; flex-shrink:0; }
 .thinking { display:flex; gap:5px; align-items:center; min-width:54px; }
 .thinking span { width:7px; height:7px; border-radius:50%; background:#8e8e93; animation:dot 1s infinite ease-in-out; }
@@ -163,7 +164,7 @@ body.in #app { display:flex; }
     <div class="chat-container" id="chat">
       <div class="message bot">Welcome back McKinley</div>
     </div>
-    <div id="app-version">Version beta 1.15</div>
+    <div id="app-version">Version beta 1.16</div>
     <div class="quick-actions" id="quick-actions">
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Add customer '">+ Customer</button>
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Called '">Log activity</button>
@@ -347,6 +348,16 @@ async function loadData() {
   myIbo = profile.data?.amway_id || '';
 }
 
+function customerPicker(pickerId, selectedId) {
+  const list = [...customers].sort((a, b) => a.name.localeCompare(b.name));
+  const blank = selectedId ? '' : '<option value="" selected>Choose a customer</option>';
+  const opts = list.map(c => '<option value="' + c.id + '"' + (c.id === selectedId ? ' selected' : '') + '>' + esc(c.name) + '</option>').join('');
+  return '<select class="who-pick" id="' + pickerId + '">' + blank + opts + '</select>';
+}
+function pickedCustomer(pickerId) {
+  const el = document.getElementById(pickerId);
+  return el ? customerById(el.value) : null;
+}
 function customerById(id) { return customers.find(c => c.id === id); }
 function whoLink(id, label) {
   return '<a class="who" href="#" onclick="event.preventDefault();openCard(\'' + id + '\')">' + esc(label) + '</a>';
@@ -686,29 +697,37 @@ function planAdd(text) {
   };
 }
 function planLog(customer, type, notes) {
+  const pickerId = 'pick' + Math.random().toString(36).slice(2, 8);
   return {
-    summary: 'Log ' + esc(type) + ' for <strong>' + esc(customer.name) + '</strong>' + (notes ? ' · ' + esc(notes) : ''),
+    customer: customer || null,
+    summary: 'Log ' + esc(type) + ' for ' + customerPicker(pickerId, customer && customer.id) + (notes ? '<br>Note: ' + esc(notes) : ''),
     run: async () => {
-      const row = { user_id: currentUser.id, customer_id: customer.id, date: today(), type, notes: notes || '' };
+      const person = pickedCustomer(pickerId);
+      if (!person) { await addMessage('Choose a customer, or cancel.'); return; }
+      const row = { user_id: currentUser.id, customer_id: person.id, date: today(), type, notes: notes || '' };
       const { data, error } = await sb.from('activities').insert(row).select().single();
       if (error) { await addMessage('Could not log activity: ' + error.message); return; }
       activities.unshift(data);
-      await sb.from('customers').update({ last_contact: today() }).eq('id', customer.id);
-      customer.last_contact = today();
-      await addMessage('Logged ' + whoLink(customer.id, type) + ' for ' + whoLink(customer.id, customer.name) + (notes ? ': ' + esc(notes) : '') + '.', 'bot', true);
+      await sb.from('customers').update({ last_contact: today() }).eq('id', person.id);
+      person.last_contact = today();
+      await addMessage('Logged ' + whoLink(person.id, type) + ' for ' + whoLink(person.id, person.name) + (notes ? ': ' + esc(notes) : '') + '.', 'bot', true);
     }
   };
 }
 function planReminder(customer, when, action) {
+  const pickerId = 'pick' + Math.random().toString(36).slice(2, 8);
   return {
-    summary: 'Remind <strong>' + esc(customer.name) + '</strong> on ' + esc(formatDate(when)) + (action ? ' · ' + esc(action) : ''),
+    customer: customer || null,
+    summary: 'Remind ' + customerPicker(pickerId, customer && customer.id) + ' on ' + esc(formatDate(when)) + (action ? ' · ' + esc(action) : ''),
     run: async () => {
+      const person = pickedCustomer(pickerId);
+      if (!person) { await addMessage('Choose a customer, or cancel.'); return; }
       const { data, error } = await sb.from('reminders').insert({
-        user_id: currentUser.id, customer_id: customer.id, reminder_date: when, action: action || 'Check in'
+        user_id: currentUser.id, customer_id: person.id, reminder_date: when, action: action || 'Check in'
       }).select().single();
       if (error) { await addMessage('Could not save reminder: ' + error.message); return; }
       reminders.push(data);
-      await addMessage('Reminder set for ' + whoLink(customer.id, customer.name) + ' on ' + formatDate(when) + '.', 'bot', true);
+      await addMessage('Reminder set for ' + whoLink(person.id, person.name) + ' on ' + formatDate(when) + '.', 'bot', true);
       renderReminders();
     }
   };
@@ -720,16 +739,14 @@ function planClause(text, inherited) {
     const parsed = extractActivity(text);
     if (!parsed.type) return null;
     const customer = findInText(parsed.rest);
-    if (!customer) return null;
-    const plan = planLog(customer, parsed.type, cleanNotes(parsed.rest, customer.name));
+    const plan = planLog(customer, parsed.type, cleanNotes(parsed.rest, customer ? customer.name : ''));
     plan.customer = customer;
     return plan;
   }
   if (/\b(remind|reminder|check in)\b/i.test(text)) {
     const cleaned = text.replace(/^(set\s+)?(reminder|remind me|check in)\s*(to|with|about|for)?\s*/i, '').trim();
     const customer = findInText(cleaned) || inherited || null;
-    if (!customer) return null;
-    const action = cleaned.replace(new RegExp(customer.name, 'i'), '').replace(/\b(on|in|tomorrow|today|me|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week)\b/ig, '').replace(/\s+/g, ' ').trim();
+    const action = customer ? cleaned.replace(new RegExp(customer.name, 'i'), '').replace(/\b(on|in|tomorrow|today|me|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week)\b/ig, '').replace(/\s+/g, ' ').trim() : '';
     const plan = planReminder(customer, parseWhen(cleaned), action);
     plan.customer = customer;
     return plan;
@@ -818,11 +835,13 @@ register({
   run: async (text) => {
     const cleaned = text.replace(/^(suggest\s+products?\s*(for)?|products?\s+for)\s*/i, '').trim();
     const customer = findInText(cleaned) || findByName(cleaned);
-    if (!customer) { await addMessage('Suggest products for which customer?'); pending = { handle: async n => { pending = null; registry.find(c => c.id === 'suggest').run('suggest products for ' + n); } }; return; }
-    await askConfirm('Suggest products for ' + whoLink(customer.id, customer.name) + '.', async () => {
-      const buys = activities.filter(a => a.customer_id === customer.id && /purchase|sample/i.test(a.type));
+    const pickerId = 'pick' + Math.random().toString(36).slice(2, 8);
+    await askConfirm('Suggest products for ' + customerPicker(pickerId, customer && customer.id) + '.', async () => {
+      const person = pickedCustomer(pickerId);
+      if (!person) { await addMessage('Choose a customer, or cancel.'); return; }
+      const buys = activities.filter(a => a.customer_id === person.id && /purchase|sample/i.test(a.type));
       const history = buys.map(b => b.notes).filter(Boolean).join(', ') || 'no purchases logged';
-      await addMessage('I don\'t have a live product catalog yet. Based on what you\'ve logged for ' + whoLink(customer.id, customer.name) + ' (' + esc(history) + '), ask them what they\'re using up and offer a sample of something adjacent. Paste a recent order if you want a tighter suggestion.', 'bot', true);
+      await addMessage('I don\'t have a live product catalog yet. Based on what you\'ve logged for ' + whoLink(person.id, person.name) + ' (' + esc(history) + '), ask them what they\'re using up and offer a sample of something adjacent. Paste a recent order if you want a tighter suggestion.', 'bot', true);
     });
   }
 });
@@ -941,16 +960,19 @@ function cleanNotes(text, name) {
   return notes;
 }
 async function finishActivity(customer, type, notes) {
+  const pickerId = 'pick' + Math.random().toString(36).slice(2, 8);
   await askConfirm(
-    'Log ' + whoLink(customer.id, type) + ' for ' + whoLink(customer.id, customer.name) + '<br>Note: ' + esc(notes || '—'),
+    'Log ' + esc(type) + ' for ' + customerPicker(pickerId, customer && customer.id) + '<br>Note: ' + esc(notes || '—'),
     async () => {
-      const row = { user_id: currentUser.id, customer_id: customer.id, date: today(), type, notes: notes || '' };
+      const person = pickedCustomer(pickerId);
+      if (!person) { await addMessage('Choose a customer, or cancel.'); return; }
+      const row = { user_id: currentUser.id, customer_id: person.id, date: today(), type, notes: notes || '' };
       const { data, error } = await sb.from('activities').insert(row).select().single();
       if (error) { await addMessage('Could not log activity: ' + error.message); return; }
       activities.unshift(data);
-      await sb.from('customers').update({ last_contact: today() }).eq('id', customer.id);
-      customer.last_contact = today();
-      await addMessage('Logged ' + whoLink(customer.id, type) + ' for ' + whoLink(customer.id, customer.name) + (notes ? ': ' + esc(notes) : '') + '.', 'bot', true);
+      await sb.from('customers').update({ last_contact: today() }).eq('id', person.id);
+      person.last_contact = today();
+      await addMessage('Logged ' + whoLink(person.id, type) + ' for ' + whoLink(person.id, person.name) + (notes ? ': ' + esc(notes) : '') + '.', 'bot', true);
     }
   );
 }
@@ -965,20 +987,8 @@ register({
       return;
     }
     const customer = findInText(parsed.rest);
-    if (!customer) {
-      await addMessage(parsed.type ? `Who did you log this ${parsed.type} for?` : 'Which customer?');
-      pending = { handle: async n => {
-        const person = findByName(n) || findInText(n);
-        if (!person) { await addMessage("I don't see that customer. Type the name again, or cancel."); return; }
-        const notes = cleanNotes(n, person.name);
-        if (notes) { await finishActivity(person, parsed.type || 'Note', notes); return; }
-        await addMessage(`Add a note for this ${parsed.type || 'activity'} with ${person.name}? Type it, or skip.`);
-        pending = { handle: async note => finishActivity(person, parsed.type || 'Note', /^(skip|none|no|n\/a|-)$/i.test(note.trim()) ? '' : note.trim()) };
-      }};
-      return;
-    }
-    const notes = cleanNotes(parsed.rest, customer.name);
-    if (!notes) {
+    const notes = cleanNotes(parsed.rest, customer ? customer.name : '');
+    if (customer && !notes) {
       await addMessage(`Add a note for this ${parsed.type || 'activity'} with ${customer.name}? Type it, or skip.`);
       pending = { handle: async note => finishActivity(customer, parsed.type || 'Note', /^(skip|none|no|n\/a|-)$/i.test(note.trim()) ? '' : note.trim()) };
       return;
@@ -1003,22 +1013,20 @@ register({
   run: async (text) => {
     let cleaned = text.replace(/^(set\s+)?(reminder|remind me|check in)\s*(to|with|about|for)?\s*/i, '').trim();
     const customer = findInText(cleaned);
-    if (!customer) {
-      await addMessage('Reminder for which customer?');
-      pending = { handle: async n => { pending = null; await registry.find(c => c.id === 'reminder').run('Remind ' + n + ' ' + cleaned); } };
-      return;
-    }
     const when = parseWhen(cleaned);
-    const action = cleaned.replace(new RegExp(customer.name, 'i'), '').replace(/\b(on|in|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week)\b/ig, '').replace(/\s+/g, ' ').trim();
+    const action = customer ? cleaned.replace(new RegExp(customer.name, 'i'), '').replace(/\b(on|in|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|next week)\b/ig, '').replace(/\s+/g, ' ').trim() : '';
+    const pickerId = 'pick' + Math.random().toString(36).slice(2, 8);
     await askConfirm(
-      'Set a reminder for ' + whoLink(customer.id, customer.name) + '<br>When: ' + esc(formatDate(when)) + '<br>Action: ' + esc(action || 'Check in'),
+      'Set a reminder for ' + customerPicker(pickerId, customer && customer.id) + '<br>When: ' + esc(formatDate(when)) + '<br>Action: ' + esc(action || 'Check in'),
       async () => {
+        const person = pickedCustomer(pickerId);
+        if (!person) { await addMessage('Choose a customer, or cancel.'); return; }
         const { data, error } = await sb.from('reminders').insert({
-          user_id: currentUser.id, customer_id: customer.id, reminder_date: when, action: action || 'Check in'
+          user_id: currentUser.id, customer_id: person.id, reminder_date: when, action: action || 'Check in'
         }).select().single();
         if (error) { await addMessage('Could not save reminder: ' + error.message); return; }
         reminders.push(data);
-        await addMessage('Reminder set for ' + whoLink(customer.id, customer.name) + ' on ' + formatDate(when) + '.', 'bot', true);
+        await addMessage('Reminder set for ' + whoLink(person.id, person.name) + ' on ' + formatDate(when) + '.', 'bot', true);
         renderReminders();
       }
     );
