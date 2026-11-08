@@ -163,7 +163,7 @@ body.in #app { display:flex; }
     <div class="chat-container" id="chat">
       <div class="message bot">Welcome back McKinley</div>
     </div>
-    <div id="app-version">Version beta 1.14</div>
+    <div id="app-version">Version beta 1.15</div>
     <div class="quick-actions" id="quick-actions">
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Add customer '">+ Customer</button>
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Called '">Log activity</button>
@@ -399,7 +399,13 @@ async function addMessage(text, who = 'bot', html = false, persist = true) {
   chat.appendChild(div);
   chat.scrollTop = chat.scrollHeight;
   if (persist && currentUser && !(PREVIEW && who === 'bot' && text.startsWith('Welcome'))) {
-    sb.from('chat_messages').insert({ user_id: currentUser.id, role: who === 'user' ? 'user' : 'assistant', content: text });
+    const { error } = await sb.from('chat_messages').insert({ user_id: currentUser.id, role: who === 'user' ? 'user' : 'assistant', content: text });
+    if (error) {
+      const note = document.createElement('div');
+      note.className = 'message bot';
+      note.textContent = 'Not saved: ' + error.message;
+      chat.appendChild(note);
+    }
   }
 }
 async function restoreChat() {
