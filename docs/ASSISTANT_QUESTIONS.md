@@ -23,7 +23,7 @@ Unmatched assistant questions are logged to `feedback` as `[assistant-unanswered
 | 3 | When was the last time I contacted Jane? | `last_contact` | Shipped |
 | 4 | What did I last talk to Sarah about? | `last_activity_detail` | Shipped |
 | 5 | How many calls did I log this month? | `activity_count` | Shipped |
-| 6 | Who needs attention? | command `attention` | Shipped (not assistant) |
+| 6 | Who needs attention? | command `attention` (Reminders + Going quiet, deduped) | Shipped (not assistant) |
 | 7 | Who haven't I contacted in 30 days? | `not_contacted_in` | Shipped |
 | 8 | How many customers do I have? | `customer_count` | Shipped |
 | 9 | What reminders are due today? | `reminders_due` | Shipped |
@@ -35,7 +35,7 @@ Unmatched assistant questions are logged to `feedback` as `[assistant-unanswered
 | 15 | Who have I never contacted? | `never_contacted` | Shipped |
 | 16 | How many people did I reach out to this week? | `reach_count` | Shipped |
 | 17 | List everyone I emailed last month | `reached_in_range` + Email filter | Partial (month + type in text) |
-| 18 | Who should I follow up with today? | `reminders_due` + attention overlap | v2 |
+| 18 | Who should I follow up with today? | `reminders_due` + `staleCustomers` | See Follow up tab |
 | 19 | What products should I suggest for Jane? | command `suggest` | Placeholder |
 | 20 | Summarize my week | `week_summary` | v2 (aggregate + optional Grok tone) |
 
