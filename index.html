@@ -164,7 +164,7 @@ body.in #app { display:flex; }
     <div class="chat-container" id="chat">
       <div class="message bot">Welcome back McKinley</div>
     </div>
-    <div id="app-version">Version beta 1.16</div>
+    <div id="app-version">Version beta 1.17</div>
     <div class="quick-actions" id="quick-actions">
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Add customer '">+ Customer</button>
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Called '">Log activity</button>
@@ -306,7 +306,9 @@ async function boot() {
     ];
     activities = [
       { id: 'a1', customer_id: '1', date: today(), type: 'Call', notes: 'Talked about samples' },
-      { id: 'a2', customer_id: '2', date: addDays(-21), type: 'Text', notes: 'Checked in' }
+      { id: 'a2', customer_id: '2', date: addDays(-21), type: 'Text', notes: 'Checked in' },
+      { id: 'a3', customer_id: '3', date: addDays(-2), type: 'Email', notes: 'Follow-up on order' },
+      { id: 'a4', customer_id: '1', date: addDays(-4), type: 'Text', notes: 'Quick check-in' }
     ];
     reminders = [
       { id: 'r1', customer_id: '2', reminder_date: today(), action: 'Check in', completed: false }
@@ -559,6 +561,180 @@ function pickActivity(label) {
   input.focus();
 }
 
+const OUTREACH_TYPES = new Set(['Call', 'Text', 'Email', 'Meeting', 'Follow-up']);
+const LOGGED_TYPES = new Set(['Call', 'Text', 'Email', 'Meeting', 'Purchase', 'Sample', 'Follow-up', 'Note']);
+
+function activityTypesForQuery(text) {
+  const lower = text.toLowerCase();
+  if (/\b(any activity|all activit|everything i logged)\b/.test(lower)) return LOGGED_TYPES;
+  return OUTREACH_TYPES;
+}
+
+function parseTimeRange(text) {
+  const lower = text.toLowerCase();
+  const end = today();
+  let start = addDays(-6);
+  let label = 'the past week';
+  if (/\btoday\b/.test(lower)) { start = end; label = 'today'; }
+  else if (/\byesterday\b/.test(lower)) { start = addDays(-1); label = 'yesterday'; }
+  else if (/\b(this month)\b/.test(lower)) {
+    const d = new Date();
+    start = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-01';
+    label = 'this month';
+  } else if (/\b(past|last)\s+week\b/.test(lower) || /\bpast 7 days\b/.test(lower) || /\blast 7 days\b/.test(lower)) {
+    start = addDays(-6);
+    label = 'the past week';
+  } else {
+    const lastN = lower.match(/\b(?:past|last)\s+(\d+)\s+days?\b/);
+    if (lastN) {
+      const n = Math.min(parseInt(lastN[1], 10) || 7, 365);
+      start = addDays(-(n - 1));
+      label = 'the past ' + n + ' days';
+    }
+    const months = ['january','february','march','april','may','june','july','august','september','october','november','december'];
+    for (let m = 0; m < months.length; m++) {
+      if (new RegExp('\\b' + months[m] + '\\b').test(lower)) {
+        const y = new Date().getFullYear();
+        const last = new Date(y, m + 1, 0);
+        start = y + '-' + String(m + 1).padStart(2, '0') + '-01';
+        const endMo = y + '-' + String(m + 1).padStart(2, '0') + '-' + String(last.getDate()).padStart(2, '0');
+        return { start, end: endMo > end ? end : endMo, label: months[m].charAt(0).toUpperCase() + months[m].slice(1) };
+      }
+    }
+  }
+  return { start, end, label };
+}
+
+function activitiesInRange(start, end, types) {
+  const typeSet = types || OUTREACH_TYPES;
+  return activities.filter(a => a.date && a.date >= start && a.date <= end && typeSet.has(a.type));
+}
+
+function customersReachedInRange(start, end, types) {
+  const byCustomer = new Map();
+  for (const a of activitiesInRange(start, end, types)) {
+    const prev = byCustomer.get(a.customer_id);
+    if (!prev || a.date > prev.date) byCustomer.set(a.customer_id, a);
+  }
+  return [...byCustomer.entries()]
+    .map(([id, latest]) => ({ customer: customerById(id), latest }))
+    .filter(row => row.customer)
+    .sort((a, b) => a.customer.name.localeCompare(b.customer.name));
+}
+
+function lastContactForCustomer(customerId) {
+  const acts = activities.filter(a => a.customer_id === customerId && a.date)
+    .sort((a, b) => b.date.localeCompare(a.date));
+  if (acts.length) return { date: acts[0].date, type: acts[0].type, notes: acts[0].notes || '' };
+  const c = customerById(customerId);
+  return c?.last_contact ? { date: c.last_contact, type: null, notes: null } : null;
+}
+
+function extractPersonFromQuery(text) {
+  const patterns = [
+    /\bwhen\s+(?:was|did)\s+(?:the\s+)?last\s+time\s+i\s+(?:contacted|called|texted|emailed|spoke with|talked to)\s+(.+?)\??$/i,
+    /\blast\s+time\s+i\s+(?:contacted|called|texted|emailed|spoke with|talked to)\s+(.+?)\??$/i,
+    /\bwhen\s+did\s+i\s+last\s+(?:contact|call|text|email)\s+(.+?)\??$/i,
+    /\bwhat\s+did\s+i\s+last\s+(?:talk|speak)\s+(?:to|with)\s+(.+?)\s+about\??$/i,
+    /\bwhat\s+did\s+i\s+last\s+say\s+to\s+(.+?)\??$/i
+  ];
+  for (const re of patterns) {
+    const m = text.trim().match(re);
+    if (m) return m[1].replace(/[?.!]+$/, '').trim();
+  }
+  return null;
+}
+
+function isCommandUtterance(t) {
+  return /^(add\b|called\b|texted\b|emailed\b|met with\b|purchased\b|bought\b|sampled\b|followed up\b|follow-up\b|log\b|remind\b|set reminder\b|check in\b|open contact\b|find\b|search\b|show\b|share with\b|suggest\b|who needs\b)/i.test(t.trim());
+}
+
+function looksLikeAssistantQuestion(text) {
+  const t = text.trim();
+  if (isCommandUtterance(normalizeUtterance(t))) return false;
+  if (/^(help|\?)$/i.test(t)) return false;
+  const inquiry = /\?$/.test(t) || /^(who|when|what|how many|which|list)\b/i.test(t);
+  const topic = /\b(last time|reach|reached|contact|contacted|called|texted|how many|talked|spoke|activity|activities|logged|outreach)\b/i.test(t);
+  return inquiry && topic;
+}
+
+function matchLocalQuery(text) {
+  const lower = text.toLowerCase();
+  if (/\bwho needs attention\b/.test(lower) || (/\bneeds attention\b/.test(lower) && /\bwho\b/.test(lower))) return null;
+  const types = activityTypesForQuery(text);
+  const range = parseTimeRange(text);
+
+  if (/\bhow many\s+(calls?|texts?|emails?|meetings?)\b/i.test(text)) {
+    const typeMap = { call: 'Call', calls: 'Call', text: 'Text', texts: 'Text', email: 'Email', emails: 'Email', meeting: 'Meeting', meetings: 'Meeting' };
+    const m = text.toLowerCase().match(/\bhow many\s+(calls?|texts?|emails?|meetings?)\b/);
+    const type = typeMap[m[1]] || 'Call';
+    return { kind: 'activity_count', start: range.start, end: range.end, label: range.label, type };
+  }
+
+  if (/\b(who|which).*\b(reach|reached|contact|contacted|call|called|text|texted|outreach|spoken|talked)\b/i.test(text) &&
+      /\b(week|days|month|today|yesterday|january|february|march|april|may|june|july|august|september|october|november|december|past|last)\b/i.test(text)) {
+    return { kind: 'reached_in_range', start: range.start, end: range.end, label: range.label, types };
+  }
+  if (/\bwho\b.*\b(reach|reached|contact|contacted|outreach)\b/i.test(text)) {
+    return { kind: 'reached_in_range', start: range.start, end: range.end, label: range.label, types };
+  }
+
+  const personName = extractPersonFromQuery(text);
+  if (personName) {
+    if (/\bwhat\b.*\b(about|say)\b/i.test(text)) {
+      return { kind: 'last_activity_detail', name: personName };
+    }
+    return { kind: 'last_contact', name: personName };
+  }
+  return null;
+}
+
+function runQuery(spec) {
+  if (spec.kind === 'reached_in_range') {
+    const rows = customersReachedInRange(spec.start, spec.end, spec.types || OUTREACH_TYPES);
+    if (!rows.length) {
+      return { html: 'No outreach logged for <strong>' + esc(spec.label) + '</strong>.' };
+    }
+    const lines = rows.map(({ customer, latest }) =>
+      '• ' + whoLink(customer.id, customer.name) + ' — ' + esc(latest.type) + ', ' + formatDate(latest.date)
+    );
+    return { html: '<strong>Reached out ' + esc(spec.label) + '</strong> (' + formatDate(spec.start) + ' – ' + formatDate(spec.end) + ')<br>' + lines.join('<br>') };
+  }
+  if (spec.kind === 'last_contact' || spec.kind === 'last_activity_detail') {
+    const customer = findByName(spec.name) || findInText(spec.name);
+    if (!customer) return { html: "I don't see <strong>" + esc(spec.name) + '</strong> in your customers.' };
+    const last = lastContactForCustomer(customer.id);
+    if (!last) {
+      return { html: 'No activity logged for ' + whoLink(customer.id, customer.name) + ' yet.' };
+    }
+    if (spec.kind === 'last_activity_detail') {
+      const note = last.notes ? esc(last.notes) : '—';
+      const typePart = last.type ? esc(last.type) + ', ' : '';
+      return { html: 'Last with ' + whoLink(customer.id, customer.name) + ': ' + typePart + formatDate(last.date) + '<br>Note: ' + note };
+    }
+    const typePart = last.type ? ' · ' + esc(last.type) : '';
+    const notePart = last.notes ? '<br>Note: ' + esc(last.notes) : '';
+    return { html: 'Last contact with ' + whoLink(customer.id, customer.name) + ': <strong>' + formatDate(last.date) + '</strong>' + typePart + notePart };
+  }
+  if (spec.kind === 'activity_count') {
+    const n = activitiesInRange(spec.start, spec.end, new Set([spec.type])).length;
+    return { html: '<strong>' + n + '</strong> ' + esc(spec.type.toLowerCase() + (n === 1 ? '' : 's')) + ' logged for ' + esc(spec.label) + ' (' + formatDate(spec.start) + ' – ' + formatDate(spec.end) + ').' };
+  }
+  return { html: 'I could not run that question yet. Try "Who have I reached out to this past week?" or "When was the last time I contacted Jane?"' };
+}
+
+async function answerAssistantQuery(text) {
+  const spec = matchLocalQuery(text);
+  if (!spec) {
+    await addMessage(
+      'Ask me about your history, for example:<br>• Who have I reached out to this past week?<br>• When was the last time I contacted Sarah?<br>• How many calls did I log this month?',
+      'bot', true);
+    return;
+  }
+  const result = runQuery(spec);
+  await addMessage(result.html, 'bot', true);
+}
+
 async function sendMessage() {
   const input = document.getElementById('chat-input');
   const text = input.value.trim();
@@ -577,6 +753,11 @@ async function sendMessage() {
     if (pending && text.toLowerCase() !== 'cancel') { await pending.handle(text); return; }
     if (text.toLowerCase() === 'cancel') { pending = null; await addMessage('Cancelled. Nothing was saved.'); return; }
     const spoken = normalizeUtterance(text);
+    if (!isCommandUtterance(spoken)) {
+      const qSpec = matchLocalQuery(text);
+      if (qSpec) { await answerAssistantQuery(text); return; }
+      if (looksLikeAssistantQuestion(text)) { await answerAssistantQuery(text); return; }
+    }
     const clauses = splitClauses(spoken);
     const parsed = planSequence(clauses);
     if (parsed.plans.length > 1 || (parsed.plans.length && clauses.length > 1)) {
@@ -597,7 +778,7 @@ async function sendMessage() {
     }
     const person = findByName(spoken);
     if (person) openCard(person.id);
-    else await addMessage("Try Add customer, Called, Set reminder, or Who needs attention. A sentence can include more than one. Type help for the list.");
+    else await addMessage("Try Add customer, Called, Set reminder, Who needs attention, or ask Who have I reached out to this past week? Type help for the list.");
   } catch (err) {
     await addMessage('Something went wrong: ' + esc(err.message));
   } finally {
@@ -820,7 +1001,7 @@ function register(cmd) { registry.push(cmd); }
 register({
   id: 'help',
   match: t => /^(help|\?)$/i.test(t.trim()),
-  run: async () => addMessage('Commands:<br>• Add customer Jane Doe. Met at school.<br>• Called Jane Doe about samples<br>• Set reminder to call Jane on Tuesday<br>• Who needs attention<br>• Suggest products for Jane<br>• Find Jane<br>• Share with name@email.com<br>• Share with IBO 123456<br>Open contact Jane Doe<br>You can put more than one in a sentence: Called Jane about samples. Remind me Friday.<br>I will show what I heard and wait for Confirm before saving. Type skip when a note is optional. Type cancel to stop.', 'bot', true)
+  run: async () => addMessage('Commands:<br>• Add customer Jane Doe. Met at school.<br>• Called Jane Doe about samples<br>• Set reminder to call Jane on Tuesday<br>• Who needs attention<br>• Suggest products for Jane<br>• Find Jane<br>• Share with name@email.com<br>• Share with IBO 123456<br>Open contact Jane Doe<br>You can put more than one in a sentence: Called Jane about samples. Remind me Friday.<br><br>Questions (no confirm):<br>• Who have I reached out to this past week?<br>• When was the last time I contacted Jane?<br>• How many calls did I log this month?<br><br>Actions wait for Confirm before saving. Type skip when a note is optional. Type cancel to stop.', 'bot', true)
 });
 
 register({
@@ -1281,7 +1462,7 @@ function exportData() {
 
 function startGuide() {
   const steps = [
-    { title: 'Chat', body: 'Most actions happen here. Type “Add customer Jane Doe” or “Called Mike about samples.”', view: 'chat', highlight: '#chat' },
+    { title: 'Chat', body: 'Most actions happen here. Type “Add customer Jane Doe” or “Called Mike about samples.” Ask “Who have I reached out to this past week?” for quick history answers.', view: 'chat', highlight: '#chat' },
     { title: 'Quick actions', body: 'These fill the box so you can finish the sentence. Log activity opens a menu first.', view: 'chat', highlight: '#quick-actions' },
     { title: 'Customers', body: 'Everyone you track. Tap a name for history, call, and text. Import and export live here.', view: 'customers', highlight: '[data-view="customers"]' },
     { title: 'Reminders', body: '“Set reminder to call Jane on Tuesday.” Open ones stay on this tab until you mark them done.', view: 'reminders', highlight: '[data-view="reminders"]' },
