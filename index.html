@@ -20,17 +20,21 @@ header { background:rgba(247,247,248,.92); backdrop-filter:blur(12px); border-bo
 .nav-btns { display:flex; background:#e4e4e9; border-radius:14px; padding:4px; overflow-x:auto; -webkit-overflow-scrolling:touch; }
 .nav-btn { background:transparent; border:none; color:#666; border-radius:11px; padding:9px 6px; margin-top:0; line-height:1.15; font-size:.72rem; font-weight:600; cursor:pointer; flex:1 1 0; min-width:0; text-align:center; }
 .tab-radio { position:absolute; top:0; left:0; opacity:0; width:1px; height:1px; pointer-events:none; }
-#chat-view, #customers-view, #reminders-view, #attention-view, #more-view { display:none !important; }
+#chat-view, #customers-view, #followup-view, #uploads-view, #more-view { display:none !important; }
 #tab-chat:checked ~ #chat-view { display:flex !important; flex-direction:column; flex:1; min-height:0; }
 #tab-customers:checked ~ #customers-view,
-#tab-reminders:checked ~ #reminders-view,
-#tab-attention:checked ~ #attention-view,
+#tab-followup:checked ~ #followup-view,
+#tab-uploads:checked ~ #uploads-view,
 #tab-more:checked ~ #more-view { display:block !important; }
 #tab-chat:checked ~ header label[for="tab-chat"],
 #tab-customers:checked ~ header label[for="tab-customers"],
-#tab-reminders:checked ~ header label[for="tab-reminders"],
-#tab-attention:checked ~ header label[for="tab-attention"],
+#tab-followup:checked ~ header label[for="tab-followup"],
+#tab-uploads:checked ~ header label[for="tab-uploads"],
 #tab-more:checked ~ header label[for="tab-more"] { background:#fff; color:#38539A; box-shadow:0 1px 4px rgba(0,0,0,.12); font-weight:600; }
+.followup-section { font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; color:#38539A; font-weight:700; margin:16px 0 10px; }
+.followup-section:first-child { margin-top:0; }
+.upload-placeholder { opacity:.85; }
+.upload-placeholder .btn { opacity:.45; pointer-events:none; }
 .nav-btn.active { background:#fff; color:var(--accent); box-shadow:0 1px 4px rgba(0,0,0,.12); font-weight:600; }
 .chat-container { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:12px; min-height:0; }
 #app-version { text-align:center; font-size:.68rem; color:#8e8e93; opacity:.55; padding:0 12px 4px; flex-shrink:0; }
@@ -102,8 +106,8 @@ body.in #app { display:flex; }
   .nav-btn { flex:none; text-align:left; padding:10px 12px; }
   #tab-chat:checked ~ #chat-view,
   #tab-customers:checked ~ #customers-view,
-  #tab-reminders:checked ~ #reminders-view,
-  #tab-attention:checked ~ #attention-view,
+  #tab-followup:checked ~ #followup-view,
+  #tab-uploads:checked ~ #uploads-view,
   #tab-more:checked ~ #more-view { grid-column:2; grid-row:1; min-height:0; overflow:auto; }
   #chat-view { align-items:center; }
   #chat-view > * { width:100%; max-width:760px; }
@@ -128,8 +132,8 @@ body.in #app { display:flex; }
 <div id="app">
   <input class="tab-radio" type="radio" name="ccview" id="tab-chat" checked>
   <input class="tab-radio" type="radio" name="ccview" id="tab-customers">
-  <input class="tab-radio" type="radio" name="ccview" id="tab-reminders">
-  <input class="tab-radio" type="radio" name="ccview" id="tab-attention">
+  <input class="tab-radio" type="radio" name="ccview" id="tab-followup">
+  <input class="tab-radio" type="radio" name="ccview" id="tab-uploads">
   <input class="tab-radio" type="radio" name="ccview" id="tab-more">
   <header>
     <div class="topbar" style="display:flex;align-items:center;justify-content:space-between;">
@@ -143,8 +147,8 @@ body.in #app { display:flex; }
     <div class="nav-btns" id="nav">
       <label for="tab-chat" class="nav-btn">Chat</label>
       <label for="tab-customers" class="nav-btn">Customers</label>
-      <label for="tab-reminders" class="nav-btn">Reminders</label>
-      <label for="tab-attention" class="nav-btn">Attention</label>
+      <label for="tab-followup" class="nav-btn">Follow up</label>
+      <label for="tab-uploads" class="nav-btn">Uploads</label>
       <label for="tab-more" class="nav-btn">More</label>
     </div>
   </header>
@@ -164,7 +168,7 @@ body.in #app { display:flex; }
     <div class="chat-container" id="chat">
       <div class="message bot">Welcome back McKinley</div>
     </div>
-    <div id="app-version">Version beta 1.18</div>
+    <div id="app-version">Version beta 1.19</div>
     <div class="quick-actions" id="quick-actions">
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Add customer '">+ Customer</button>
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Called '">Log activity</button>
@@ -178,8 +182,8 @@ body.in #app { display:flex; }
     </div>
   </div>
   <div id="customers-view" class="list-view"></div>
-  <div id="reminders-view" class="list-view"></div>
-  <div id="attention-view" class="list-view"></div>
+  <div id="followup-view" class="list-view" data-view="followup"></div>
+  <div id="uploads-view" class="list-view" data-view="uploads"></div>
   <div id="more-view" class="list-view"></div>
   <aside id="customer-pane"><div id="customer-pane-body"><div class="pane-empty">Open a customer and they stay here.</div></div></aside>
 </div>
@@ -444,8 +448,8 @@ function showView(view) {
   var radio = document.getElementById('tab-' + view);
   if (radio) radio.checked = true;
   if (view === 'customers') renderCustomers();
-  if (view === 'reminders') renderReminders();
-  if (view === 'attention') renderAttention();
+  if (view === 'followup') renderFollowUp();
+  if (view === 'uploads') renderUploads();
   if (view === 'more') renderMore();
 }
 function isWide() { return window.matchMedia('(min-width: 900px)').matches; }
@@ -830,7 +834,7 @@ function runQuery(spec) {
 async function logUnansweredAssistant(question) {
   const trimmed = String(question || '').trim().slice(0, 2000);
   if (!trimmed || !currentUser) return;
-  const message = '[assistant-unanswered] v1.18 — ' + trimmed;
+  const message = '[assistant-unanswered] v1.19 — ' + trimmed;
   if (PREVIEW) {
     console.info(message);
     return;
@@ -1027,7 +1031,7 @@ function planReminder(customer, when, action) {
       if (error) { await addMessage('Could not save reminder: ' + error.message); return; }
       reminders.push(data);
       await addMessage('Reminder set for ' + whoLink(person.id, person.name) + ' on ' + formatDate(when) + '.', 'bot', true);
-      renderReminders();
+      renderFollowUp();
     }
   };
 }
@@ -1119,7 +1123,7 @@ function register(cmd) { registry.push(cmd); }
 register({
   id: 'help',
   match: t => /^(help|\?)$/i.test(t.trim()),
-  run: async () => addMessage('Commands:<br>• Add customer Jane Doe. Met at school.<br>• Called Jane Doe about samples<br>• Set reminder to call Jane on Tuesday<br>• Who needs attention<br>• Suggest products for Jane<br>• Find Jane<br>• Share with name@email.com<br>• Share with IBO 123456<br>Open contact Jane Doe<br>You can put more than one in a sentence: Called Jane about samples. Remind me Friday.<br><br>Questions (no confirm):<br>• What customers have I talked with this month?<br>• Who haven\'t I contacted in 30 days?<br>• When was the last time I contacted Jane?<br>• How many customers do I have?<br>• What reminders are due today?<br><br>Actions wait for Confirm before saving. Type skip when a note is optional. Type cancel to stop.', 'bot', true)
+  run: async () => addMessage('Commands:<br>• Add customer Jane Doe. Met at school.<br>• Called Jane Doe about samples<br>• Set reminder to call Jane on Tuesday<br>• Who needs attention<br>• Suggest products for Jane<br>• Find Jane<br>• Share with name@email.com<br>• Share with IBO 123456<br>Open contact Jane Doe<br>You can put more than one in a sentence: Called Jane about samples. Remind me Friday.<br><br>Tabs: Follow up (reminders + going quiet), Uploads (Amway exports coming soon).<br><br>Questions (no confirm):<br>• What customers have I talked with this month?<br>• Who haven\'t I contacted in 30 days?<br>• When was the last time I contacted Jane?<br>• How many customers do I have?<br>• What reminders are due today?<br><br>Actions wait for Confirm before saving. Type skip when a note is optional. Type cancel to stop.', 'bot', true)
 });
 
 register({
@@ -1326,21 +1330,48 @@ register({
         if (error) { await addMessage('Could not save reminder: ' + error.message); return; }
         reminders.push(data);
         await addMessage('Reminder set for ' + whoLink(person.id, person.name) + ' on ' + formatDate(when) + '.', 'bot', true);
-        renderReminders();
+        renderFollowUp();
       }
     );
   }
 });
 
-async function showAttentionInChat() {
-  const list = attentionList();
-  if (!list.length) { await addMessage('No one needs attention right now.'); return; }
-  await addMessage('<strong>Needs attention</strong><br>' + list.map(c => '• ' + esc(c.name)).join('<br>'), 'bot', true);
+function openRemindersSorted() {
+  return [...reminders].sort((a, b) => (a.reminder_date || '').localeCompare(b.reminder_date || ''));
 }
-function attentionList() {
+
+function reminderCustomerIds() {
+  return new Set(reminders.map(r => r.customer_id));
+}
+
+function staleCustomers() {
   const t = today();
-  const due = new Set(reminders.filter(r => r.reminder_date <= t).map(r => r.customer_id));
-  return customers.filter(c => due.has(c.id) || !c.last_contact || daysBetween(c.last_contact, t) >= (c.inactivity_days || 14));
+  const hasReminder = reminderCustomerIds();
+  return customers.filter(c => {
+    if (hasReminder.has(c.id)) return false;
+    return !c.last_contact || daysBetween(c.last_contact, t) >= (c.inactivity_days || 14);
+  }).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function showAttentionInChat() {
+  const open = openRemindersSorted();
+  const stale = staleCustomers();
+  if (!open.length && !stale.length) {
+    await addMessage('No one needs attention right now.');
+    return;
+  }
+  const parts = [];
+  if (open.length) {
+    parts.push('<strong>Reminders</strong><br>' + open.map(r => {
+      const c = customerById(r.customer_id);
+      const name = c ? esc(c.name) : 'Customer';
+      return '• ' + name + ' — ' + formatDate(r.reminder_date) + ' · ' + esc(r.action || 'Check in');
+    }).join('<br>'));
+  }
+  if (stale.length) {
+    parts.push('<strong>Going quiet</strong><br>' + stale.map(c => '• ' + esc(c.name) + ' — last ' + formatDate(c.last_contact)).join('<br>'));
+  }
+  await addMessage(parts.join('<br><br>'), 'bot', true);
 }
 
 function renderCustomers() {
@@ -1354,25 +1385,46 @@ function renderCustomers() {
         <div style="color:var(--dim);font-size:.85rem;margin-top:4px;">Last: ${formatDate(c.last_contact)}</div>
       </div>`).join('') : '<div class="empty">No customers yet.</div>');
 }
-function renderReminders() {
-  const view = document.getElementById('reminders-view');
-  view.innerHTML = reminders.length ? reminders.map(r => {
-    const c = customerById(r.customer_id);
-    return `<div class="attention-card" onclick="openCard('${r.customer_id}')"><strong>${esc(c ? c.name : 'Customer')}</strong><br><span style="color:#b86e00;font-size:.85rem;">${formatDate(r.reminder_date)} · ${esc(r.action || 'Check in')}</span>
+function renderFollowUp() {
+  const view = document.getElementById('followup-view');
+  const open = openRemindersSorted();
+  const stale = staleCustomers();
+  let html = '';
+  if (open.length) {
+    html += '<div class="followup-section">Reminders</div>' + open.map(r => {
+      const c = customerById(r.customer_id);
+      return `<div class="attention-card" onclick="openCard('${r.customer_id}')"><strong>${esc(c ? c.name : 'Customer')}</strong><br><span style="color:#b86e00;font-size:.85rem;">${formatDate(r.reminder_date)} · ${esc(r.action || 'Check in')}</span>
       <div style="margin-top:8px;"><button class="btn ghost" style="width:auto;padding:8px 12px;" onclick="event.stopPropagation();completeReminder('${r.id}')">Done</button></div></div>`;
-  }).join('') : '<div class="empty">No active reminders.</div>';
+    }).join('');
+  }
+  if (stale.length) {
+    html += '<div class="followup-section">Going quiet</div>' + stale.map(c => `
+    <div class="attention-card" onclick="openCard('${c.id}')"><strong>${esc(c.name)}</strong><br>
+    <span style="color:var(--dim);font-size:.85rem;">Last contact ${formatDate(c.last_contact)}</span></div>`).join('');
+  }
+  if (!html) html = '<div class="empty">Nothing due. Your circle looks current.</div>';
+  view.innerHTML = html;
 }
 async function completeReminder(id) {
   await sb.from('reminders').update({ completed: true }).eq('id', id);
   reminders = reminders.filter(r => r.id !== id);
-  renderReminders();
+  renderFollowUp();
 }
-function renderAttention() {
-  const list = attentionList();
-  document.getElementById('attention-view').innerHTML = list.length ? list.map(c => `
-    <div class="attention-card" onclick="openCard('${c.id}')"><strong>${esc(c.name)}</strong><br>
-    <span style="color:var(--dim);font-size:.85rem;">Last contact ${formatDate(c.last_contact)}</span></div>`).join('')
-    : '<div class="empty">No one needs attention right now.</div>';
+function renderUploads() {
+  document.getElementById('uploads-view').innerHTML = `
+    <h2 style="font-size:1.2rem;margin-bottom:8px;">Uploads</h2>
+    <p style="color:var(--dim);font-size:.9rem;line-height:1.45;margin-bottom:20px;">Import files you export from Amway.com. CustomerCircle does not connect to Amway automatically yet.</p>
+    <div class="attention-card upload-placeholder">
+      <strong>Customer list export</strong>
+      <p style="color:var(--dim);font-size:.85rem;margin-top:6px;">CSV or spreadsheet from My Office → Customers</p>
+      <span class="badge" style="margin-left:0;margin-top:8px;">Coming soon</span>
+    </div>
+    <div class="attention-card upload-placeholder">
+      <strong>Order history</strong>
+      <p style="color:var(--dim);font-size:.85rem;margin-top:6px;">Customer orders from My Office to log purchases in your circle</p>
+      <span class="badge" style="margin-left:0;margin-top:8px;">Coming soon</span>
+    </div>
+    <p style="color:var(--dim);font-size:.8rem;margin-top:16px;">For contacts today, use Import on the Customers tab (CSV or vCard).</p>`;
 }
 function renderMore() {
   document.getElementById('more-view').innerHTML = `
@@ -1583,8 +1635,8 @@ function startGuide() {
     { title: 'Chat', body: 'Most actions happen here. Type “Add customer Jane Doe” or “Called Mike about samples.” Ask “Who have I reached out to this past week?” for quick history answers.', view: 'chat', highlight: '#chat' },
     { title: 'Quick actions', body: 'These fill the box so you can finish the sentence. Log activity opens a menu first.', view: 'chat', highlight: '#quick-actions' },
     { title: 'Customers', body: 'Everyone you track. Tap a name for history, call, and text. Import and export live here.', view: 'customers', highlight: '[data-view="customers"]' },
-    { title: 'Reminders', body: '“Set reminder to call Jane on Tuesday.” Open ones stay on this tab until you mark them done.', view: 'reminders', highlight: '[data-view="reminders"]' },
-    { title: 'Attention', body: 'People you have not contacted recently, plus anyone with a due reminder.', view: 'attention', highlight: '[data-view="attention"]' },
+    { title: 'Follow up', body: 'Reminders you set in chat, plus people going quiet (no overlap). Mark reminders Done when finished.', view: 'followup', highlight: '#followup-view' },
+    { title: 'Uploads', body: 'Soon you can upload customer lists and order history from Amway.com. CSV/vCard import stays on Customers for now.', view: 'uploads', highlight: '#uploads-view' },
     { title: 'More', body: 'Save your IBO number, share your circle by email or IBO number, or send feedback with a screenshot.', view: 'more', highlight: '[data-view="more"]' }
   ];
   let i = 0;
