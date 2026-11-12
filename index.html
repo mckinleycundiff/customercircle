@@ -164,7 +164,7 @@ body.in #app { display:flex; }
     <div class="chat-container" id="chat">
       <div class="message bot">Welcome back McKinley</div>
     </div>
-    <div id="app-version">Version beta 1.17</div>
+    <div id="app-version">Version beta 1.18</div>
     <div class="quick-actions" id="quick-actions">
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Add customer '">+ Customer</button>
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Called '">Log activity</button>
@@ -214,6 +214,7 @@ function previewClient() {
             if (name === 'activities') activities.unshift(row);
             if (name === 'reminders') reminders.push(row);
             if (name === 'profiles') myIbo = row.amway_id || myIbo;
+            if (name === 'feedback') return Promise.resolve({ data: single ? row : [row], error: null });
             return Promise.resolve({ data: single ? row : [row], error: null });
           }
           if (state.op === 'update' && bag) {
@@ -566,8 +567,29 @@ const LOGGED_TYPES = new Set(['Call', 'Text', 'Email', 'Meeting', 'Purchase', 'S
 
 function activityTypesForQuery(text) {
   const lower = text.toLowerCase();
+  if (/\b(sampled|samples?\b)/.test(lower) && !/\bsuggest\b/.test(lower)) return new Set(['Sample']);
+  if (/\b(purchased|purchases?|bought)\b/.test(lower)) return new Set(['Purchase']);
+  if (/\bemailed\b/.test(lower)) return new Set(['Email']);
+  if (/\b(called|calls)\b/.test(lower) && /\b(how many|who|list|what customer)/.test(lower)) return new Set(['Call']);
+  if (/\b(texted|texts)\b/.test(lower)) return new Set(['Text']);
   if (/\b(any activity|all activit|everything i logged)\b/.test(lower)) return LOGGED_TYPES;
   return OUTREACH_TYPES;
+}
+
+function isReachListQuestion(text) {
+  const lower = text.toLowerCase();
+  if (extractPersonFromQuery(text)) return false;
+  if (/\bhow many\b/.test(lower)) return false;
+  if (!/\b(talk|talked|speak|spoke|reach|reached|contact|contacted|call|called|text|texted|email|emailed|communicat|touch|followed up|outreach|sampled|purchased|bought)\b/.test(lower)) return false;
+  return /\b(who|what|which|list|show|name|customer|people|contact)\b/.test(lower);
+}
+
+function parseInactiveDays(text) {
+  const m = text.match(/(\d+)\s+days?/);
+  if (m) return Math.min(parseInt(m[1], 10), 365);
+  if (/\bmonth\b/.test(text.toLowerCase())) return 30;
+  if (/\bweek\b/.test(text.toLowerCase())) return 14;
+  return 14;
 }
 
 function parseTimeRange(text) {
@@ -654,7 +676,7 @@ function looksLikeAssistantQuestion(text) {
   if (isCommandUtterance(normalizeUtterance(t))) return false;
   if (/^(help|\?)$/i.test(t)) return false;
   const inquiry = /\?$/.test(t) || /^(who|when|what|how many|which|list)\b/i.test(t);
-  const topic = /\b(last time|reach|reached|contact|contacted|called|texted|how many|talked|spoke|activity|activities|logged|outreach)\b/i.test(t);
+  const topic = /\b(last time|reach|reached|contact|contacted|called|texted|how many|talked|spoke|activity|activities|logged|outreach|reminder|customer|haven't|never|meet|preferred|sample|purchas)\b/i.test(t);
   return inquiry && topic;
 }
 
@@ -664,6 +686,10 @@ function matchLocalQuery(text) {
   const types = activityTypesForQuery(text);
   const range = parseTimeRange(text);
 
+  if (/\bhow many\s+customers?\b/i.test(text)) {
+    return { kind: 'customer_count' };
+  }
+
   if (/\bhow many\s+(calls?|texts?|emails?|meetings?)\b/i.test(text)) {
     const typeMap = { call: 'Call', calls: 'Call', text: 'Text', texts: 'Text', email: 'Email', emails: 'Email', meeting: 'Meeting', meetings: 'Meeting' };
     const m = text.toLowerCase().match(/\bhow many\s+(calls?|texts?|emails?|meetings?)\b/);
@@ -671,11 +697,41 @@ function matchLocalQuery(text) {
     return { kind: 'activity_count', start: range.start, end: range.end, label: range.label, type };
   }
 
-  if (/\b(who|which).*\b(reach|reached|contact|contacted|call|called|text|texted|outreach|spoken|talked)\b/i.test(text) &&
-      /\b(week|days|month|today|yesterday|january|february|march|april|may|june|july|august|september|october|november|december|past|last)\b/i.test(text)) {
-    return { kind: 'reached_in_range', start: range.start, end: range.end, label: range.label, types };
+  if (/\bhow many\s+(people|customers?|contacts?)\b.*\b(reach|contact|talk|spoke|call)\b/i.test(text)) {
+    return { kind: 'reach_count', start: range.start, end: range.end, label: range.label, types };
   }
-  if (/\bwho\b.*\b(reach|reached|contact|contacted|outreach)\b/i.test(text)) {
+
+  if (/\b(never contacted|no activity|never talked)\b/i.test(text) || /\bwho\b.*\bnever\b.*\bcontact/.test(lower)) {
+    return { kind: 'never_contacted' };
+  }
+
+  if (/\b(haven't|have not|not)\s+contacted\b/i.test(text) || /\bwho\b.*\b(not|n't)\b.*\bcontact/.test(lower)) {
+    return { kind: 'not_contacted_in', days: parseInactiveDays(text) };
+  }
+
+  if (/\b(reminders?\s+(due|today)|what reminders|due today)\b/i.test(text)) {
+    const due = /\btoday\b/.test(lower) ? today() : null;
+    return { kind: 'reminders_due', on: due };
+  }
+
+  if (/\b(when is|what is)\s+my\s+reminder\b/i.test(text) || /\breminder\s+for\b/i.test(text)) {
+    const name = text.replace(/.*\breminder\s+(for|with)\s+/i, '').replace(/[?.!]+$/, '').trim()
+      || text.replace(/.*\b(for|with)\s+/i, '').replace(/[?.!]+$/, '').trim();
+    if (name && name.length < 80) return { kind: 'reminder_for', name };
+  }
+
+  if (/\bhow did i meet\b/i.test(text)) {
+    const name = text.replace(/^.*\bhow did i meet\s+/i, '').replace(/[?.!]+$/, '').trim();
+    if (name) return { kind: 'customer_info', name, field: 'how_met' };
+  }
+  if (/\b(preferred|best way to contact)\b/i.test(text)) {
+    const customer = findInText(text) || findByName(text.replace(/.*\bfor\s+/i, ''));
+    if (customer) return { kind: 'customer_info', name: customer.name, field: 'preferred' };
+    const name = text.replace(/^.*\b(contact|reach)\s+/i, '').replace(/[?.!]+$/, '').trim();
+    if (name) return { kind: 'customer_info', name, field: 'preferred' };
+  }
+
+  if (isReachListQuestion(text)) {
     return { kind: 'reached_in_range', start: range.start, end: range.end, label: range.label, types };
   }
 
@@ -720,14 +776,76 @@ function runQuery(spec) {
     const n = activitiesInRange(spec.start, spec.end, new Set([spec.type])).length;
     return { html: '<strong>' + n + '</strong> ' + esc(spec.type.toLowerCase() + (n === 1 ? '' : 's')) + ' logged for ' + esc(spec.label) + ' (' + formatDate(spec.start) + ' – ' + formatDate(spec.end) + ').' };
   }
+  if (spec.kind === 'customer_count') {
+    return { html: 'You have <strong>' + customers.length + '</strong> customer' + (customers.length === 1 ? '' : 's') + ' in your circle.' };
+  }
+  if (spec.kind === 'reach_count') {
+    const n = customersReachedInRange(spec.start, spec.end, spec.types || OUTREACH_TYPES).length;
+    return { html: 'You reached <strong>' + n + '</strong> ' + (n === 1 ? 'person' : 'people') + ' ' + esc(spec.label) + '.' };
+  }
+  if (spec.kind === 'never_contacted') {
+    const touched = new Set(activities.map(a => a.customer_id));
+    const list = customers.filter(c => !touched.has(c.id) && !c.last_contact);
+    if (!list.length) return { html: 'Everyone in your circle has at least one logged touch or last-contact date.' };
+    return { html: '<strong>Never logged</strong><br>' + list.map(c => '• ' + whoLink(c.id, c.name)).join('<br>') };
+  }
+  if (spec.kind === 'not_contacted_in') {
+    const t = today();
+    const list = customers.filter(c => !c.last_contact || daysBetween(c.last_contact, t) >= spec.days);
+    if (!list.length) return { html: 'Everyone has been contacted within the last ' + spec.days + ' days (by last-contact date).' };
+    return { html: '<strong>No contact in ' + spec.days + '+ days</strong><br>' + list.map(c =>
+      '• ' + whoLink(c.id, c.name) + ' — last ' + formatDate(c.last_contact)
+    ).join('<br>') };
+  }
+  if (spec.kind === 'reminders_due') {
+    const t = spec.on || today();
+    const due = reminders.filter(r => r.reminder_date <= t);
+    if (!due.length) return { html: 'No reminders due' + (spec.on ? ' today' : '') + '.' };
+    return { html: '<strong>Reminders due</strong><br>' + due.map(r => {
+      const c = customerById(r.customer_id);
+      return '• ' + (c ? whoLink(c.id, c.name) : 'Customer') + ' — ' + formatDate(r.reminder_date) + ' · ' + esc(r.action || 'Check in');
+    }).join('<br>') };
+  }
+  if (spec.kind === 'reminder_for') {
+    const customer = findByName(spec.name) || findInText(spec.name);
+    if (!customer) return { html: "I don't see <strong>" + esc(spec.name) + '</strong> in your customers.' };
+    const rs = reminders.filter(r => r.customer_id === customer.id).sort((a, b) => a.reminder_date.localeCompare(b.reminder_date));
+    if (!rs.length) return { html: 'No open reminder for ' + whoLink(customer.id, customer.name) + '.' };
+    const r = rs[0];
+    return { html: 'Next reminder for ' + whoLink(customer.id, customer.name) + ': <strong>' + formatDate(r.reminder_date) + '</strong> · ' + esc(r.action || 'Check in') };
+  }
+  if (spec.kind === 'customer_info') {
+    const customer = findByName(spec.name) || findInText(spec.name);
+    if (!customer) return { html: "I don't see <strong>" + esc(spec.name) + '</strong> in your customers.' };
+    if (spec.field === 'how_met') {
+      const v = customer.how_met || '—';
+      return { html: 'You met ' + whoLink(customer.id, customer.name) + ' through: ' + esc(v) };
+    }
+    const v = customer.preferred || 'Text';
+    return { html: whoLink(customer.id, customer.name) + ' prefers: <strong>' + esc(v) + '</strong>' };
+  }
   return { html: 'I could not run that question yet. Try "Who have I reached out to this past week?" or "When was the last time I contacted Jane?"' };
+}
+
+async function logUnansweredAssistant(question) {
+  const trimmed = String(question || '').trim().slice(0, 2000);
+  if (!trimmed || !currentUser) return;
+  const message = '[assistant-unanswered] v1.18 — ' + trimmed;
+  if (PREVIEW) {
+    console.info(message);
+    return;
+  }
+  try {
+    await sb.from('feedback').insert({ user_id: currentUser.id, message, screenshot_url: null });
+  } catch (e) { /* best-effort */ }
 }
 
 async function answerAssistantQuery(text) {
   const spec = matchLocalQuery(text);
   if (!spec) {
+    await logUnansweredAssistant(text);
     await addMessage(
-      'Ask me about your history, for example:<br>• Who have I reached out to this past week?<br>• When was the last time I contacted Sarah?<br>• How many calls did I log this month?',
+      'I don\'t have a grounded answer for that yet — I\'ve saved your question so we can teach the assistant.<br><br>Try:<br>• What customers have I talked with this month?<br>• Who haven\'t I contacted in 30 days?<br>• What reminders are due today?',
       'bot', true);
     return;
   }
@@ -1001,7 +1119,7 @@ function register(cmd) { registry.push(cmd); }
 register({
   id: 'help',
   match: t => /^(help|\?)$/i.test(t.trim()),
-  run: async () => addMessage('Commands:<br>• Add customer Jane Doe. Met at school.<br>• Called Jane Doe about samples<br>• Set reminder to call Jane on Tuesday<br>• Who needs attention<br>• Suggest products for Jane<br>• Find Jane<br>• Share with name@email.com<br>• Share with IBO 123456<br>Open contact Jane Doe<br>You can put more than one in a sentence: Called Jane about samples. Remind me Friday.<br><br>Questions (no confirm):<br>• Who have I reached out to this past week?<br>• When was the last time I contacted Jane?<br>• How many calls did I log this month?<br><br>Actions wait for Confirm before saving. Type skip when a note is optional. Type cancel to stop.', 'bot', true)
+  run: async () => addMessage('Commands:<br>• Add customer Jane Doe. Met at school.<br>• Called Jane Doe about samples<br>• Set reminder to call Jane on Tuesday<br>• Who needs attention<br>• Suggest products for Jane<br>• Find Jane<br>• Share with name@email.com<br>• Share with IBO 123456<br>Open contact Jane Doe<br>You can put more than one in a sentence: Called Jane about samples. Remind me Friday.<br><br>Questions (no confirm):<br>• What customers have I talked with this month?<br>• Who haven\'t I contacted in 30 days?<br>• When was the last time I contacted Jane?<br>• How many customers do I have?<br>• What reminders are due today?<br><br>Actions wait for Confirm before saving. Type skip when a note is optional. Type cancel to stop.', 'bot', true)
 });
 
 register({
