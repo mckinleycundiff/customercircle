@@ -168,7 +168,7 @@ body.in #app { display:flex; }
     <div class="chat-container" id="chat">
       <div class="message bot">Welcome back McKinley</div>
     </div>
-    <div id="app-version">Version beta 1.19</div>
+    <div id="app-version">Version beta 1.20</div>
     <div class="quick-actions" id="quick-actions">
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Add customer '">+ Customer</button>
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Called '">Log activity</button>
@@ -197,7 +197,30 @@ function previewClient() {
   const bags = () => ({ customers, activities, reminders });
   return {
     auth: { getSession: async () => ({ data: { session: null } }), signInWithOAuth: async () => ({ error: null }), signOut: async () => ({}) },
-    rpc: async () => ({ data: 'preview-user', error: null }),
+    rpc: async (fn, params) => {
+      if (fn === 'find_ibo') return { data: 'preview-user', error: null };
+      if (fn === 'list_shares_received') {
+        return {
+          data: [{
+            owner_id: 'preview-owner',
+            owner_label: 'McKinley C.',
+            shared_at: new Date().toISOString(),
+            customer_count: customers.length
+          }],
+          error: null
+        };
+      }
+      if (fn === 'get_shared_circle') {
+        const cust = customers.map(c => ({ ...c, id: 'sh-' + c.id }));
+        const acts = activities.map(a => ({
+          ...a,
+          id: 'sha-' + a.id,
+          customer_id: 'sh-' + a.customer_id
+        }));
+        return { data: { customers: cust, activities: acts }, error: null };
+      }
+      return { data: null, error: { message: 'Unknown rpc' } };
+    },
     from(name) {
       const state = { op: 'select', row: null, patch: null, filters: [] };
       const api = {
@@ -250,6 +273,8 @@ let activities = [];
 let reminders = [];
 let currentView = 'chat';
 let myIbo = '';
+let sharesReceived = [];
+let sharedSession = null;
 let pending = null;
 let quickOpen = true;
 function bindChrome() {
@@ -285,6 +310,7 @@ function addDays(n) {
   const d = new Date(); d.setDate(d.getDate() + n); return d.toISOString().slice(0, 10);
 }
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&','<':'<','>':'>','"':'"',"'":'&#39;'}[c])); }
+function escAttr(s) { return String(s ?? '').replace(/\\/g, '\\\\').replace(/'/g, '&#39;'); }
 function displayName() {
   const m = currentUser?.user_metadata || {};
   return (m.full_name || m.name || '').trim();
@@ -443,19 +469,23 @@ async function restoreChat() {
   chat.scrollTop = chat.scrollHeight;
 }
 
-function showView(view) {
+async function showView(view) {
   currentView = view;
   var radio = document.getElementById('tab-' + view);
   if (radio) radio.checked = true;
   if (view === 'customers') renderCustomers();
   if (view === 'followup') renderFollowUp();
   if (view === 'uploads') renderUploads();
-  if (view === 'more') renderMore();
+  if (view === 'more') await renderMore();
 }
 function isWide() { return window.matchMedia('(min-width: 900px)').matches; }
 function closeModal() {
+  sharedSession = null;
   document.getElementById('modal').classList.remove('show');
   if (isWide()) document.getElementById('customer-pane-body').innerHTML = '<div class="pane-empty">Open a customer and they stay here.</div>';
+}
+function closeSharedView() {
+  closeModal();
 }
 function openModal(html) {
   if (isWide()) { document.getElementById('customer-pane-body').innerHTML = html; return; }
@@ -834,7 +864,7 @@ function runQuery(spec) {
 async function logUnansweredAssistant(question) {
   const trimmed = String(question || '').trim().slice(0, 2000);
   if (!trimmed || !currentUser) return;
-  const message = '[assistant-unanswered] v1.19 — ' + trimmed;
+  const message = '[assistant-unanswered] v1.20 — ' + trimmed;
   if (PREVIEW) {
     console.info(message);
     return;
@@ -1123,7 +1153,7 @@ function register(cmd) { registry.push(cmd); }
 register({
   id: 'help',
   match: t => /^(help|\?)$/i.test(t.trim()),
-  run: async () => addMessage('Commands:<br>• Add customer Jane Doe. Met at school.<br>• Called Jane Doe about samples<br>• Set reminder to call Jane on Tuesday<br>• Who needs attention<br>• Suggest products for Jane<br>• Find Jane<br>• Share with name@email.com<br>• Share with IBO 123456<br>Open contact Jane Doe<br>You can put more than one in a sentence: Called Jane about samples. Remind me Friday.<br><br>Tabs: Follow up (reminders + going quiet), Uploads (Amway exports coming soon).<br><br>Questions (no confirm):<br>• What customers have I talked with this month?<br>• Who haven\'t I contacted in 30 days?<br>• When was the last time I contacted Jane?<br>• How many customers do I have?<br>• What reminders are due today?<br><br>Actions wait for Confirm before saving. Type skip when a note is optional. Type cancel to stop.', 'bot', true)
+  run: async () => addMessage('Commands:<br>• Add customer Jane Doe. Met at school.<br>• Called Jane Doe about samples<br>• Set reminder to call Jane on Tuesday<br>• Who needs attention<br>• Suggest products for Jane<br>• Find Jane<br>• Share with name@email.com<br>• Share with IBO 123456<br>Open contact Jane Doe<br>You can put more than one in a sentence: Called Jane about samples. Remind me Friday.<br><br>Tabs: Follow up, Uploads. More → Shared with me (read-only circles others shared).<br><br>Questions (no confirm):<br>• What customers have I talked with this month?<br>• Who haven\'t I contacted in 30 days?<br>• When was the last time I contacted Jane?<br>• How many customers do I have?<br>• What reminders are due today?<br><br>Actions wait for Confirm before saving. Type skip when a note is optional. Type cancel to stop.', 'bot', true)
 });
 
 register({
@@ -1426,7 +1456,96 @@ function renderUploads() {
     </div>
     <p style="color:var(--dim);font-size:.8rem;margin-top:16px;">For contacts today, use Import on the Customers tab (CSV or vCard).</p>`;
 }
-function renderMore() {
+async function loadSharesReceived() {
+  if (PREVIEW) {
+    const res = await sb.rpc('list_shares_received');
+    sharesReceived = res.data || [];
+    return;
+  }
+  const { data, error } = await sb.rpc('list_shares_received');
+  if (error) {
+    sharesReceived = [];
+    return;
+  }
+  sharesReceived = data || [];
+}
+
+function sharedLastLine(customerId) {
+  if (!sharedSession) return '—';
+  const acts = sharedSession.activities.filter(a => a.customer_id === customerId && a.date)
+    .sort((a, b) => b.date.localeCompare(a.date));
+  if (acts.length) return formatDate(acts[0].date) + ' · ' + acts[0].type;
+  const c = sharedSession.customers.find(x => x.id === customerId);
+  if (c && c.last_contact) return formatDate(c.last_contact) + ' · last contact';
+  return 'No activity yet';
+}
+
+function renderSharedCircleListHtml() {
+  const label = esc(sharedSession.ownerLabel);
+  const list = sharedSession.customers.length ? sharedSession.customers.map(c =>
+    `<div class="attention-card" onclick="openSharedCustomerCard('${escAttr(c.id)}')"><strong>${esc(c.name)}</strong>
+    <p style="color:var(--dim);font-size:.85rem;margin-top:4px;">Last · ${esc(sharedLastLine(c.id))}</p></div>`
+  ).join('') : '<div class="empty">No customers in this circle.</div>';
+  return `<button class="modal-close" onclick="closeSharedView()">×</button>
+    <div class="heard-label">Read-only</div>
+    <h2 style="font-size:1.2rem;margin:8px 0;">${label}&apos;s circle</h2>
+    <p style="color:var(--dim);font-size:.82rem;margin-bottom:12px;">Call and Text use your phone. You cannot log or edit here.</p>
+    ${list}`;
+}
+
+function openSharedCircleFromSession() {
+  if (!sharedSession) return;
+  openModal(renderSharedCircleListHtml());
+}
+
+async function openSharedCircle(ownerId, ownerLabel) {
+  const label = ownerLabel || 'Shared circle';
+  const { data, error } = await sb.rpc('get_shared_circle', { p_owner_id: ownerId });
+  if (error || !data) {
+    alert((error && error.message) || 'Could not load shared circle.');
+    return;
+  }
+  sharedSession = {
+    ownerId,
+    ownerLabel: label,
+    customers: data.customers || [],
+    activities: data.activities || []
+  };
+  openModal(renderSharedCircleListHtml());
+}
+
+function openSharedCustomerCard(customerId) {
+  if (!sharedSession) return;
+  const c = sharedSession.customers.find(x => x.id === customerId);
+  if (!c) return;
+  const acts = sharedSession.activities.filter(a => a.customer_id === customerId).slice(0, 10);
+  const phone = c.phone ? `<a href="tel:${esc(c.phone)}">Call</a> · <a href="sms:${esc(c.phone)}">Text</a>` : '';
+  const rows = acts.length ? acts.map(a =>
+    `<div class="history-head" style="padding:10px 0;border-bottom:1px solid var(--border);font-size:.86rem;grid-template-columns:78px 78px 1fr;">
+      <span>${formatDate(a.date)}</span><span>${esc(a.type)}</span><span>${esc(a.notes || '—')}</span></div>`
+  ).join('') : '<div style="color:var(--dim);padding:16px 0;">No activity yet</div>';
+  openModal(`<button class="modal-close" onclick="closeSharedView()">×</button>
+    <button class="btn ghost" style="width:auto;padding:8px 12px;margin-top:0;" onclick="openSharedCircleFromSession()">Back</button>
+    <div class="heard-label">Shared · ${esc(sharedSession.ownerLabel)}</div>
+    <h2 style="font-size:1.3rem;">${esc(c.name)}</h2>
+    <div style="color:var(--dim);font-size:.85rem;margin:6px 0 12px;">Preferred: ${esc(c.preferred || '—')} · Met: ${esc(c.how_met || '—')}${c.amway_id ? ' · Amway ' + esc(c.amway_id) : ''}</div>
+    <div style="margin-bottom:10px;">${phone}</div>
+    <div class="history-head"><span>Date</span><span>Activity</span><span>Notes</span></div>
+    ${rows}
+    <p style="color:var(--dim);font-size:.75rem;margin-top:12px;">To track ${esc(c.name)} in your circle, add them on the Customers tab.</p>`);
+}
+
+async function renderMore() {
+  await loadSharesReceived();
+  const sharedBlock = sharesReceived.length
+    ? sharesReceived.map(s => {
+        const sharedLabel = s.shared_at ? formatDate(String(s.shared_at).slice(0, 10)) : '—';
+        return `<div class="attention-card" onclick="openSharedCircle('${escAttr(s.owner_id)}', '${escAttr(s.owner_label || 'IBO')}')">
+        <strong>${esc(s.owner_label || 'IBO')}</strong>
+        <p style="color:var(--dim);font-size:.85rem;margin-top:4px;">${Number(s.customer_count) || 0} customer${Number(s.customer_count) === 1 ? '' : 's'} · shared ${esc(sharedLabel)}</p>
+      </div>`;
+      }).join('')
+    : '<div class="empty" style="padding:24px 16px;">No one has shared a circle with you yet.</div>';
   document.getElementById('more-view').innerHTML = `
     <h3 style="margin-bottom:8px;">Your IBO number</h3>
     <p style="color:var(--dim);font-size:.9rem;">Save this so another IBO can share with you by number.</p>
@@ -1436,6 +1555,9 @@ function renderMore() {
     <p style="color:var(--dim);font-size:.9rem;">Share by their email or their IBO number. Nothing is sent to Amway.</p>
     <input id="share-lookup" class="field" placeholder="Email or IBO number">
     <button class="btn" onclick="shareFromForm()">Share</button>
+    <h3 style="margin:28px 0 8px;">Shared with me</h3>
+    <p style="color:var(--dim);font-size:.9rem;">Read-only view. Tap a name to browse their customers.</p>
+    ${sharedBlock}
     <h3 style="margin:28px 0 8px;">Feedback</h3>
     <p style="color:var(--dim);font-size:.9rem;">Tell me what broke. A screenshot of this screen is attached when the browser allows it.</p>
     <textarea id="feedback-text" class="field" rows="4" placeholder="What happened?"></textarea>
@@ -1637,7 +1759,7 @@ function startGuide() {
     { title: 'Customers', body: 'Everyone you track. Tap a name for history, call, and text. Import and export live here.', view: 'customers', highlight: '[data-view="customers"]' },
     { title: 'Follow up', body: 'Reminders you set in chat, plus people going quiet (no overlap). Mark reminders Done when finished.', view: 'followup', highlight: '#followup-view' },
     { title: 'Uploads', body: 'Soon you can upload customer lists and order history from Amway.com. CSV/vCard import stays on Customers for now.', view: 'uploads', highlight: '#uploads-view' },
-    { title: 'More', body: 'Save your IBO number, share your circle by email or IBO number, or send feedback with a screenshot.', view: 'more', highlight: '[data-view="more"]' }
+    { title: 'More', body: 'Save your IBO number, share your circle, open Shared with me for read-only circles from other IBOs, or send feedback.', view: 'more', highlight: '#more-view' }
   ];
   let i = 0;
   const overlay = document.createElement('div');
