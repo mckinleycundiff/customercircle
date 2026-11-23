@@ -33,6 +33,8 @@ header { background:rgba(247,247,248,.92); backdrop-filter:blur(12px); border-bo
 #tab-uploads:checked ~ header label[for="tab-uploads"],
 #tab-more:checked ~ header label[for="tab-more"] { background:#fff; color:#38539A; box-shadow:0 1px 4px rgba(0,0,0,.12); font-weight:600; }
 .followup-section { font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; color:#38539A; font-weight:700; margin:16px 0 10px; }
+.protocol-badge { font-size:.65rem; font-weight:700; color:#38539A; background:#e8ecf7; padding:2px 6px; border-radius:6px; margin-left:6px; vertical-align:middle; }
+.followup-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:8px; }
 .followup-section:first-child { margin-top:0; }
 .upload-placeholder { opacity:.85; }
 .upload-placeholder .btn { opacity:.45; pointer-events:none; }
@@ -184,7 +186,7 @@ body.in #app { display:flex; }
       <div class="message bot">Welcome back McKinley</div>
     </div>
     <div id="chat-toolbar">
-      <span id="app-version">Version beta 1.22</span>
+      <span id="app-version">Version beta 1.23</span>
       <button type="button" class="chat-clear-btn" onclick="clearChatForSession()">Clear chat</button>
     </div>
     <div class="quick-actions" id="quick-actions">
@@ -372,6 +374,150 @@ function formatDate(d) {
   return new Date(d + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 function daysBetween(a, b) { return Math.floor((new Date(b) - new Date(a)) / 86400000); }
+
+const OUTREACH = {
+  monthly: { warnDays: 25 },
+  quarterly: { warnDays: 80 },
+  firstTimeOrder: { day7: 7, day30: 30 }
+};
+const OUTREACH_LABELS = {
+  none: 'None',
+  monthly: 'Monthly',
+  quarterly: 'Quarterly',
+  first_time_order: 'First time order'
+};
+
+function parseProtocolMeta(c) {
+  const m = c && c.protocol_meta;
+  if (!m) return {};
+  if (typeof m === 'object') return { ...m };
+  try { return JSON.parse(m); } catch (e) { return {}; }
+}
+function lastCrmTouchDate(customerId) {
+  const last = lastContactForCustomer(customerId);
+  const touch = last && last.date ? last.date : null;
+  const c = customerById(customerId);
+  const ack = c ? parseProtocolMeta(c).last_protocol_done : null;
+  if (!touch && !ack) return null;
+  if (!touch) return ack;
+  if (!ack) return touch;
+  return touch > ack ? touch : ack;
+}
+function latestPurchaseDate(customerId) {
+  const buys = activities.filter(a => a.customer_id === customerId && a.type === 'Purchase' && a.date)
+    .sort((a, b) => b.date.localeCompare(a.date));
+  return buys.length ? buys[0].date : null;
+}
+function protocolOrderAnchor(c) {
+  if (c.protocol_anchor) return c.protocol_anchor;
+  return latestPurchaseDate(c.id);
+}
+function addDaysFrom(dateStr, n) {
+  const d = new Date(dateStr + 'T12:00:00');
+  d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+function computeProtocolDue(c, asOf) {
+  const t = asOf || today();
+  const proto = c.outreach_protocol || 'none';
+  if (proto === 'monthly') {
+    const touch = lastCrmTouchDate(c.id);
+    const base = touch || c.last_contact;
+    if (!base) return { step: 'monthly', action: 'Monthly touch base', dueDate: t };
+    if (daysBetween(base, t) < OUTREACH.monthly.warnDays) return null;
+    return { step: 'monthly', action: 'Monthly touch base', dueDate: addDaysFrom(base, OUTREACH.monthly.warnDays) };
+  }
+  if (proto === 'quarterly') {
+    const touch = lastCrmTouchDate(c.id);
+    const base = touch || c.last_contact;
+    if (!base) return { step: 'quarterly', action: 'Quarterly touch base', dueDate: t };
+    if (daysBetween(base, t) < OUTREACH.quarterly.warnDays) return null;
+    return { step: 'quarterly', action: 'Quarterly touch base', dueDate: addDaysFrom(base, OUTREACH.quarterly.warnDays) };
+  }
+  if (proto === 'first_time_order') {
+    const anchor = protocolOrderAnchor(c);
+    if (!anchor) return null;
+    const meta = parseProtocolMeta(c);
+    if (!meta.fto_7_done && daysBetween(anchor, t) >= OUTREACH.firstTimeOrder.day7) {
+      return { step: 'fto_7', action: 'Check if products arrived', dueDate: addDaysFrom(anchor, OUTREACH.firstTimeOrder.day7) };
+    }
+    if (meta.fto_7_done && !meta.fto_30_done && daysBetween(anchor, t) >= OUTREACH.firstTimeOrder.day30) {
+      return { step: 'fto_30', action: 'How are products working?', dueDate: addDaysFrom(anchor, OUTREACH.firstTimeOrder.day30) };
+    }
+  }
+  return null;
+}
+function outreachProtocolLabel(c) {
+  return OUTREACH_LABELS[c.outreach_protocol || 'none'] || '';
+}
+function reminderProtocolBadge(r) {
+  if ((r.source || 'manual') !== 'protocol') return '';
+  const map = { monthly: 'Monthly', quarterly: 'Quarterly', fto_7: 'First order · day 7', fto_30: 'First order · day 30' };
+  const label = map[r.protocol_step] || 'Protocol';
+  return '<span class="protocol-badge">' + esc(label) + '</span>';
+}
+async function reconcileProtocolReminders() {
+  if (!currentUser) return;
+  const t = today();
+  for (const c of customers) {
+    const proto = c.outreach_protocol || 'none';
+    const openProto = reminders.filter(r => r.customer_id === c.id && (r.source || 'manual') === 'protocol');
+    if (proto === 'none') {
+      for (const r of openProto) {
+        await sb.from('reminders').delete().eq('id', r.id);
+        reminders = reminders.filter(x => x.id !== r.id);
+      }
+      continue;
+    }
+    const due = computeProtocolDue(c, t);
+    if (!due) {
+      for (const r of openProto) {
+        await sb.from('reminders').delete().eq('id', r.id);
+        reminders = reminders.filter(x => x.id !== r.id);
+      }
+      continue;
+    }
+    const match = openProto.find(r => r.protocol_step === due.step);
+    if (match) {
+      if (match.reminder_date !== due.dueDate || (match.action || '') !== due.action) {
+        const { error } = await sb.from('reminders').update({ reminder_date: due.dueDate, action: due.action }).eq('id', match.id);
+        if (!error) { match.reminder_date = due.dueDate; match.action = due.action; }
+      }
+      for (const r of openProto.filter(x => x.id !== match.id)) {
+        await sb.from('reminders').delete().eq('id', r.id);
+        reminders = reminders.filter(x => x.id !== r.id);
+      }
+    } else {
+      for (const r of openProto) {
+        await sb.from('reminders').delete().eq('id', r.id);
+        reminders = reminders.filter(x => x.id !== r.id);
+      }
+      const row = {
+        user_id: currentUser.id,
+        customer_id: c.id,
+        reminder_date: due.dueDate,
+        action: due.action,
+        completed: false,
+        source: 'protocol',
+        protocol_step: due.step
+      };
+      const { data, error } = await sb.from('reminders').insert(row).select().single();
+      if (!error && data) {
+        reminders.push(data);
+      } else if (error) {
+        console.warn('Protocol reminder sync:', error.message);
+      }
+    }
+  }
+}
+function startLogContact(customerId) {
+  const c = customerById(customerId);
+  if (!c) return;
+  showView('chat');
+  const input = document.getElementById('chat-input');
+  input.value = 'Called ' + c.name + ' ';
+  input.focus();
+}
 function daysUntilWeekday(target) {
   const diff = target - new Date().getDay();
   return diff <= 0 ? diff + 7 : diff;
@@ -449,6 +595,7 @@ async function loadData() {
   reminders = r.data || [];
   const profile = await sb.from('profiles').select('amway_id').eq('id', uid).maybeSingle();
   myIbo = profile.data?.amway_id || '';
+  await reconcileProtocolReminders();
 }
 
 function customerPicker(pickerId, selectedId) {
@@ -1117,6 +1264,11 @@ function planLog(customer, type, notes) {
       activities.unshift(data);
       await sb.from('customers').update({ last_contact: today() }).eq('id', person.id);
       person.last_contact = today();
+      if (type === 'Purchase' && (person.outreach_protocol || 'none') === 'first_time_order' && !person.protocol_anchor) {
+        await sb.from('customers').update({ protocol_anchor: today() }).eq('id', person.id);
+        person.protocol_anchor = today();
+      }
+      await reconcileProtocolReminders();
       await addMessage('Logged ' + whoLink(person.id, type) + ' for ' + whoLink(person.id, person.name) + (notes ? ': ' + esc(notes) : '') + '.', 'bot', true);
     }
   };
@@ -1130,7 +1282,8 @@ function planReminder(customer, when, action) {
       const person = pickedCustomer(pickerId);
       if (!person) { await addMessage('Choose a customer, or cancel.'); return; }
       const { data, error } = await sb.from('reminders').insert({
-        user_id: currentUser.id, customer_id: person.id, reminder_date: when, action: action || 'Check in'
+        user_id: currentUser.id, customer_id: person.id, reminder_date: when, action: action || 'Check in',
+        source: 'manual', protocol_step: null
       }).select().single();
       if (error) { await addMessage('Could not save reminder: ' + error.message); return; }
       reminders.push(data);
@@ -1379,6 +1532,11 @@ async function finishActivity(customer, type, notes) {
       activities.unshift(data);
       await sb.from('customers').update({ last_contact: today() }).eq('id', person.id);
       person.last_contact = today();
+      if (type === 'Purchase' && (person.outreach_protocol || 'none') === 'first_time_order' && !person.protocol_anchor) {
+        await sb.from('customers').update({ protocol_anchor: today() }).eq('id', person.id);
+        person.protocol_anchor = today();
+      }
+      await reconcileProtocolReminders();
       await addMessage('Logged ' + whoLink(person.id, type) + ' for ' + whoLink(person.id, person.name) + (notes ? ': ' + esc(notes) : '') + '.', 'bot', true);
     }
   );
@@ -1429,7 +1587,8 @@ register({
         const person = pickedCustomer(pickerId);
         if (!person) { await addMessage('Choose a customer, or cancel.'); return; }
         const { data, error } = await sb.from('reminders').insert({
-          user_id: currentUser.id, customer_id: person.id, reminder_date: when, action: action || 'Check in'
+          user_id: currentUser.id, customer_id: person.id, reminder_date: when, action: action || 'Check in',
+          source: 'manual', protocol_step: null
         }).select().single();
         if (error) { await addMessage('Could not save reminder: ' + error.message); return; }
         reminders.push(data);
@@ -1453,6 +1612,8 @@ function staleCustomers() {
   const hasReminder = reminderCustomerIds();
   return customers.filter(c => {
     if (hasReminder.has(c.id)) return false;
+    const proto = c.outreach_protocol || 'none';
+    if (proto !== 'none') return false;
     return !c.last_contact || daysBetween(c.last_contact, t) >= (c.inactivity_days || 14);
   }).sort((a, b) => a.name.localeCompare(b.name));
 }
@@ -1485,7 +1646,7 @@ function renderCustomers() {
       <button class="btn" style="width:auto;padding:10px 14px;margin:0;" onclick="exportData()">Export</button>
     </div>` + (customers.length ? customers.map(c => `
       <div class="customer-card" onclick="openCard('${c.id}')">
-        <strong>${esc(c.name)}</strong> <span class="badge">${esc(c.preferred || 'Text')}</span>
+        <strong>${esc(c.name)}</strong> <span class="badge">${esc(c.preferred || 'Text')}</span>${(c.outreach_protocol || 'none') !== 'none' ? ' <span class="protocol-badge">' + esc(outreachProtocolLabel(c)) + '</span>' : ''}
         <div style="color:var(--dim);font-size:.85rem;margin-top:4px;">Last: ${formatDate(c.last_contact)}</div>
       </div>`).join('') : '<div class="empty">No customers yet.</div>');
 }
@@ -1497,8 +1658,13 @@ function renderFollowUp() {
   if (open.length) {
     html += '<div class="followup-section">Reminders</div>' + open.map(r => {
       const c = customerById(r.customer_id);
-      return `<div class="attention-card" onclick="openCard('${r.customer_id}')"><strong>${esc(c ? c.name : 'Customer')}</strong><br><span style="color:#b86e00;font-size:.85rem;">${formatDate(r.reminder_date)} · ${esc(r.action || 'Check in')}</span>
-      <div style="margin-top:8px;"><button class="btn ghost" style="width:auto;padding:8px 12px;" onclick="event.stopPropagation();completeReminder('${r.id}')">Done</button></div></div>`;
+      const isProto = (r.source || 'manual') === 'protocol';
+      const actions = isProto
+        ? `<div class="followup-actions"><button class="btn ghost" style="width:auto;padding:8px 12px;margin:0;" onclick="event.stopPropagation();completeReminder('${r.id}')">Done</button>
+          <button class="btn ghost" style="width:auto;padding:8px 12px;margin:0;" onclick="event.stopPropagation();startLogContact('${r.customer_id}')">Log contact</button></div>`
+        : `<div class="followup-actions"><button class="btn ghost" style="width:auto;padding:8px 12px;margin:0;" onclick="event.stopPropagation();completeReminder('${r.id}')">Done</button></div>`;
+      return `<div class="attention-card" onclick="openCard('${r.customer_id}')"><strong>${esc(c ? c.name : 'Customer')}</strong>${reminderProtocolBadge(r)}<br><span style="color:#b86e00;font-size:.85rem;">${formatDate(r.reminder_date)} · ${esc(r.action || 'Check in')}</span>
+      ${actions}</div>`;
     }).join('');
   }
   if (stale.length) {
@@ -1510,8 +1676,22 @@ function renderFollowUp() {
   view.innerHTML = html;
 }
 async function completeReminder(id) {
+  const r = reminders.find(x => x.id === id);
+  if (!r) return;
+  if ((r.source || 'manual') === 'protocol') {
+    const c = customerById(r.customer_id);
+    if (c) {
+      const meta = parseProtocolMeta(c);
+      if (r.protocol_step === 'fto_7') meta.fto_7_done = true;
+      else if (r.protocol_step === 'fto_30') meta.fto_30_done = true;
+      else meta.last_protocol_done = today();
+      const { error } = await sb.from('customers').update({ protocol_meta: meta }).eq('id', c.id);
+      if (!error) c.protocol_meta = meta;
+    }
+  }
   await sb.from('reminders').update({ completed: true }).eq('id', id);
-  reminders = reminders.filter(r => r.id !== id);
+  reminders = reminders.filter(x => x.id !== id);
+  await reconcileProtocolReminders();
   renderFollowUp();
 }
 function renderUploads() {
@@ -1674,7 +1854,10 @@ function customerContactLine(c) {
 }
 function customerDetailHeader(c) {
   const notes = c.notes ? '<p style="color:var(--dim);font-size:.85rem;margin:8px 0 12px;">' + esc(c.notes) + '</p>' : '';
+  const proto = (c.outreach_protocol || 'none') !== 'none'
+    ? '<div style="margin:4px 0 8px;"><span class="protocol-badge">' + esc(outreachProtocolLabel(c)) + ' outreach</span></div>' : '';
   return `<h2 style="font-size:1.3rem;">${esc(c.name)}</h2>
+    ${proto}
     <div style="color:var(--dim);font-size:.85rem;margin:6px 0 8px;">Preferred: ${esc(c.preferred || '—')} · Met: ${esc(c.how_met || '—')}${c.amway_id ? ' · Amway ' + esc(c.amway_id) : ''}</div>
     <div style="margin-bottom:12px;">${customerContactLine(c)}</div>
     ${notes}
@@ -1687,9 +1870,19 @@ function preferredOptions(current) {
   if (current && !types.includes(current)) types.unshift(current);
   return types.map(t => `<option${t === current ? ' selected' : ''}>${esc(t)}</option>`).join('');
 }
+function outreachProtocolOptions(current) {
+  return ['none', 'monthly', 'quarterly', 'first_time_order'].map(p => {
+    const sel = (current || 'none') === p ? ' selected' : '';
+    return `<option value="${p}"${sel}>${esc(OUTREACH_LABELS[p])}</option>`;
+  }).join('');
+}
 function editCustomer(id) {
   const c = customerById(id);
   if (!c) return;
+  const anchor = c.protocol_anchor || protocolOrderAnchor(c) || '';
+  const proto = c.outreach_protocol || 'none';
+  const anchorBlock = `<label id="edit-cust-anchor-wrap" style="display:${proto === 'first_time_order' ? 'block' : 'none'};">Order date (first purchase)</label>
+    <input id="edit-cust-protocol-anchor" class="field" type="date" value="${escAttr(anchor)}" style="display:${proto === 'first_time_order' ? 'block' : 'none'};" onchange="toggleProtocolAnchorField()">`;
   openModal(`<button class="modal-close" onclick="closeModal()">×</button>
     <h3>Edit customer</h3>
     <label>Name</label><input id="edit-cust-name" class="field" value="${escAttr(c.name)}">
@@ -1699,11 +1892,26 @@ function editCustomer(id) {
     <label>Preferred contact</label><select id="edit-cust-preferred" class="field">${preferredOptions(c.preferred || 'Text')}</select>
     <label>Amway customer ID</label><input id="edit-cust-amway" class="field" value="${escAttr(c.amway_id || '')}">
     <label>Notes</label><textarea id="edit-cust-notes" class="field" rows="3">${esc(c.notes || '')}</textarea>
+    <label>Outreach protocol</label>
+    <select id="edit-cust-protocol" class="field" onchange="toggleProtocolAnchorField()">${outreachProtocolOptions(proto)}</select>
+  <p style="color:var(--dim);font-size:.78rem;margin-top:4px;">Monthly: reminder at 25 days since last note. Quarterly: 80 days. First order: day 7 and 30 check-ins.</p>
+    ${anchorBlock}
     <button class="btn" onclick="reviewCustomerEdit('${c.id}')">Save</button>
     <button class="btn ghost" style="color:#b42318;border-color:#b42318;" onclick="reviewCustomerDelete('${c.id}')">Delete customer</button>
     <button class="btn ghost" onclick="openCard('${c.id}')">Back</button>`);
 }
+function toggleProtocolAnchorField() {
+  const proto = document.getElementById('edit-cust-protocol').value;
+  const show = proto === 'first_time_order';
+  const wrap = document.getElementById('edit-cust-anchor-wrap');
+  const input = document.getElementById('edit-cust-protocol-anchor');
+  if (wrap) wrap.style.display = show ? 'block' : 'none';
+  if (input) input.style.display = show ? 'block' : 'none';
+}
 function readCustomerEditForm() {
+  const proto = document.getElementById('edit-cust-protocol').value;
+  let anchor = document.getElementById('edit-cust-protocol-anchor').value || null;
+  if (proto !== 'first_time_order') anchor = null;
   return {
     name: document.getElementById('edit-cust-name').value.trim(),
     how_met: document.getElementById('edit-cust-how-met').value.trim(),
@@ -1711,7 +1919,9 @@ function readCustomerEditForm() {
     email: document.getElementById('edit-cust-email').value.trim(),
     preferred: document.getElementById('edit-cust-preferred').value,
     amway_id: document.getElementById('edit-cust-amway').value.trim(),
-    notes: document.getElementById('edit-cust-notes').value.trim()
+    notes: document.getElementById('edit-cust-notes').value.trim(),
+    outreach_protocol: proto,
+    protocol_anchor: anchor
   };
 }
 function reviewCustomerEdit(id) {
@@ -1726,7 +1936,8 @@ function reviewCustomerEdit(id) {
     Email: ${esc(draft.email || '—')}<br>
     Preferred: ${esc(draft.preferred)}<br>
   Amway ID: ${esc(draft.amway_id || '—')}<br>
-    Notes: ${esc(draft.notes || '—')}</div>
+    Notes: ${esc(draft.notes || '—')}<br>
+    Outreach: ${esc(OUTREACH_LABELS[draft.outreach_protocol] || 'None')}${draft.protocol_anchor ? '<br>Order date: ' + esc(formatDate(draft.protocol_anchor)) : ''}</div>
     <button class="btn" onclick="saveCustomerEdit()">Confirm</button>
     <button class="btn ghost" onclick="editCustomer('${id}')">Back</button>`);
 }
@@ -1740,13 +1951,16 @@ async function saveCustomerEdit() {
     email: draft.email,
     preferred: draft.preferred,
     amway_id: draft.amway_id,
-    notes: draft.notes
+    notes: draft.notes,
+    outreach_protocol: draft.outreach_protocol || 'none',
+    protocol_anchor: draft.protocol_anchor || null
   };
   const { error } = await sb.from('customers').update(patch).eq('id', draft.id);
   if (error) { alert(error.message); return; }
   const c = customerById(draft.id);
   if (c) Object.assign(c, patch);
   window._customerDraft = null;
+  await reconcileProtocolReminders();
   openCard(draft.id);
   if (currentView === 'customers') renderCustomers();
 }
@@ -1830,6 +2044,7 @@ async function saveActivityEdit() {
   const a = activities.find(x => x.id === draft.id);
   if (a) { a.date = draft.date; a.type = draft.type; a.notes = draft.notes; }
   await refreshLastContact(draft.customerId);
+  await reconcileProtocolReminders();
   openCard(draft.customerId);
 }
 function reviewActivityDelete(id) {
@@ -1849,6 +2064,7 @@ async function deleteActivity(id) {
   if (error) { alert(error.message); return; }
   activities = activities.filter(x => x.id !== id);
   await refreshLastContact(a.customer_id);
+  await reconcileProtocolReminders();
   openCard(a.customer_id);
 }
 async function refreshLastContact(customerId) {
@@ -1941,7 +2157,7 @@ function startGuide() {
     { title: 'Chat', body: 'Most actions happen here. Type “Add customer Jane Doe” or “Called Mike about samples.” Ask “Who have I reached out to this past week?” for quick history answers. Clear chat hides messages until you refresh; nothing is deleted from your account.', view: 'chat', highlight: '#chat' },
     { title: 'Quick actions', body: 'These fill the box so you can finish the sentence. Log activity opens a menu first.', view: 'chat', highlight: '#quick-actions' },
     { title: 'Customers', body: 'Everyone you track. Tap a name for history, call, and text. Use Edit customer to change their details or delete them (with confirmation). Import and export live here.', view: 'customers', highlight: '[data-view="customers"]' },
-    { title: 'Follow up', body: 'Reminders you set in chat, plus people going quiet (no overlap). Mark reminders Done when finished.', view: 'followup', highlight: '#followup-view' },
+    { title: 'Follow up', body: 'Chat reminders plus outreach protocols (Monthly, Quarterly, First order). Protocol items offer Done or Log contact. Going quiet lists only customers with no protocol.', view: 'followup', highlight: '#followup-view' },
     { title: 'Uploads', body: 'Soon you can upload customer lists and order history from Amway.com. CSV/vCard import stays on Customers for now.', view: 'uploads', highlight: '#uploads-view' },
     { title: 'More', body: 'Save your IBO number, share your circle, open Shared with me for read-only circles from other IBOs, or send feedback.', view: 'more', highlight: '#more-view' }
   ];
