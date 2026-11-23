@@ -10,6 +10,7 @@
 <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%23ffffff'/%3E%3Ccircle cx='50' cy='50' r='38' fill='none' stroke='%2338539A' stroke-width='6'/%3E%3Ccircle cx='42' cy='50' r='14' fill='%2338539A' opacity='0.55'/%3E%3Ccircle cx='58' cy='50' r='14' fill='%2338539A' opacity='0.75'/%3E%3C/svg%3E">
+<script src="config.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>
@@ -38,6 +39,8 @@ header { background:rgba(247,247,248,.92); backdrop-filter:blur(12px); border-bo
 .nav-btn.active { background:#fff; color:var(--accent); box-shadow:0 1px 4px rgba(0,0,0,.12); font-weight:600; }
 .chat-container { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:12px; min-height:0; }
 #app-version { text-align:center; font-size:.68rem; color:#8e8e93; opacity:.55; padding:0 12px 4px; flex-shrink:0; }
+.env-dev-banner { background:#fef3cd; color:#7a5c00; font-size:.72rem; font-weight:600; text-align:center; padding:6px 12px; border-bottom:1px solid #f0d78c; flex-shrink:0; }
+body.env-dev #login-screen .env-dev-note { font-size:.8rem; color:#7a5c00; margin-top:8px; }
 .product-tile { display:flex; gap:8px; align-items:center; margin:12px 16px 0; padding:10px 8px 10px 12px; background:#fff; border:1px solid var(--border); border-radius:16px; box-shadow:var(--shadow); flex-shrink:0; color:inherit; }
 .potd-main { display:flex; gap:12px; align-items:center; flex:1; min-width:0; background:none; border:none; padding:0; text-align:left; color:inherit; font:inherit; cursor:pointer; }
 .potd-caret { width:32px; height:32px; border:none; background:none; color:#38539A; font-size:1.05rem; cursor:pointer; flex-shrink:0; }
@@ -127,6 +130,7 @@ body.in #app { display:flex; }
   <p style="color:var(--dim);max-width:280px;">Sign in with Google to open your customer circle.</p>
   <button class="btn" style="max-width:280px;" onclick="signIn()">Sign in with Google</button>
   <p id="login-error" style="color:#b42318;font-size:.85rem;"></p>
+  <p id="login-env-note" class="env-dev-note" style="display:none;"></p>
 </div>
 
 <div id="app">
@@ -168,7 +172,7 @@ body.in #app { display:flex; }
     <div class="chat-container" id="chat">
       <div class="message bot">Welcome back McKinley</div>
     </div>
-    <div id="app-version">Version beta 1.20</div>
+    <div id="app-version">Version beta 1.21</div>
     <div class="quick-actions" id="quick-actions">
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Add customer '">+ Customer</button>
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Called '">Log activity</button>
@@ -191,8 +195,37 @@ body.in #app { display:flex; }
 <div id="modal" class="modal" onclick="if(event.target.id==='modal')closeModal()"><div class="modal-content" id="modal-content"></div></div>
 
 <script>
-const SUPABASE_URL = 'https://igfzsivcupfcigzrmltw.supabase.co';
-const SUPABASE_ANON_KEY = 'sb_publishable_m6SeJ_f2BPMUvGdR80xyow_zOvMFCp4';
+const CC = window.CC_CONFIG || {};
+const CC_ENV = CC.env || 'development';
+const IS_DEV = CC_ENV === 'development';
+const IS_PROD = CC_ENV === 'production';
+const SUPABASE_URL = CC.supabaseUrl || 'https://igfzsivcupfcigzrmltw.supabase.co';
+const SUPABASE_ANON_KEY = CC.supabaseAnonKey || 'sb_publishable_m6SeJ_f2BPMUvGdR80xyow_zOvMFCp4';
+const DEV_PROJECT_REF = CC.projectRef || 'igfzsivcupfcigzrmltw';
+
+function applyEnvironmentChrome() {
+  if (!IS_DEV) return;
+  document.body.classList.add('env-dev');
+  document.title = 'CustomerCircle (Dev)';
+  const appTitle = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+  if (appTitle) appTitle.setAttribute('content', 'CustomerCircle Dev');
+  const ver = document.getElementById('app-version');
+  if (ver && !ver.textContent.includes('Dev')) ver.textContent += ' · Dev';
+  const app = document.getElementById('app');
+  if (app && !document.getElementById('env-banner')) {
+    const banner = document.createElement('div');
+    banner.id = 'env-banner';
+    banner.className = 'env-dev-banner';
+    banner.textContent = (CC.label || 'Development') + ' database — safe for test data';
+    app.insertBefore(banner, app.firstChild);
+  }
+  const loginNote = document.getElementById('login-env-note');
+  if (loginNote) {
+    loginNote.style.display = 'block';
+    loginNote.textContent = 'Signed in users connect to the development Supabase project.';
+  }
+}
+applyEnvironmentChrome();
 function previewClient() {
   const bags = () => ({ customers, activities, reminders });
   return {
@@ -259,10 +292,10 @@ function previewClient() {
     }
   };
 }
-const PREVIEW = new URLSearchParams(location.search).has('preview') || location.hostname.endsWith('ship.place');
+const MOCK_PREVIEW = new URLSearchParams(location.search).has('preview');
 let sb;
 try {
-  sb = PREVIEW ? previewClient() : window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  sb = MOCK_PREVIEW ? previewClient() : window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 } catch (e) {
   sb = previewClient();
 }
@@ -327,7 +360,7 @@ async function signIn() {
 async function signOut() { await sb.auth.signOut(); location.reload(); }
 
 async function boot() {
-  if (PREVIEW) {
+  if (MOCK_PREVIEW) {
     currentUser = { id: 'preview', user_metadata: { full_name: 'McKinley' } };
     myIbo = '1234567';
     customers = [
@@ -442,7 +475,7 @@ async function addMessage(text, who = 'bot', html = false, persist = true) {
   if (html) div.innerHTML = text; else div.textContent = text;
   chat.appendChild(div);
   chat.scrollTop = chat.scrollHeight;
-  if (persist && currentUser && !(PREVIEW && who === 'bot' && text.startsWith('Welcome'))) {
+  if (persist && currentUser && !(MOCK_PREVIEW && who === 'bot' && text.startsWith('Welcome'))) {
     const { error } = await sb.from('chat_messages').insert({ user_id: currentUser.id, role: who === 'user' ? 'user' : 'assistant', content: text });
     if (error) {
       const note = document.createElement('div');
@@ -864,8 +897,8 @@ function runQuery(spec) {
 async function logUnansweredAssistant(question) {
   const trimmed = String(question || '').trim().slice(0, 2000);
   if (!trimmed || !currentUser) return;
-  const message = '[assistant-unanswered] v1.20 — ' + trimmed;
-  if (PREVIEW) {
+  const message = '[assistant-unanswered] v1.21 — ' + trimmed;
+  if (MOCK_PREVIEW) {
     console.info(message);
     return;
   }
@@ -1457,7 +1490,7 @@ function renderUploads() {
     <p style="color:var(--dim);font-size:.8rem;margin-top:16px;">For contacts today, use Import on the Customers tab (CSV or vCard).</p>`;
 }
 async function loadSharesReceived() {
-  if (PREVIEW) {
+  if (MOCK_PREVIEW) {
     const res = await sb.rpc('list_shares_received');
     sharesReceived = res.data || [];
     return;
