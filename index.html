@@ -40,6 +40,10 @@ header { background:rgba(247,247,248,.92); backdrop-filter:blur(12px); border-bo
 .chat-container { flex:1; overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:12px; min-height:0; }
 #app-version { text-align:center; font-size:.68rem; color:#8e8e93; opacity:.55; padding:0 12px 4px; flex-shrink:0; }
 .env-dev-banner { background:#fef3cd; color:#7a5c00; font-size:.72rem; font-weight:600; text-align:center; padding:6px 12px; border-bottom:1px solid #f0d78c; flex-shrink:0; }
+#chat-toolbar { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:0 16px 2px; flex-shrink:0; }
+#chat-toolbar .chat-clear-btn { background:none; border:none; color:#8e8e93; font-size:.68rem; font-weight:600; cursor:pointer; padding:4px 0; text-decoration:underline; }
+#chat-toolbar .chat-clear-btn:hover { color:#38539A; }
+.chat-cleared-note { font-size:.8rem; color:var(--dim); text-align:center; padding:24px 16px; }
 .env-dev-pill { display:inline-block; font-size:.62rem; font-weight:800; letter-spacing:.08em; color:#fff; background:#b86e00; padding:3px 7px; border-radius:6px; vertical-align:middle; margin-left:6px; }
 body.env-dev #login-screen { padding-top:0; }
 body.env-dev #login-screen .login-dev-banner { width:100%; background:#b86e00; color:#fff; font-size:.75rem; font-weight:700; letter-spacing:.12em; text-align:center; padding:8px 12px; margin:0 0 20px; }
@@ -123,6 +127,9 @@ body.in #app { display:flex; }
   #app > header { position:relative; }
   #help-btn { position:absolute; left:16px; bottom:18px; }
   #amway-link { position:absolute; left:50%; bottom:16px; transform:translateX(-50%); }
+  #env-banner { display:none; }
+  body.env-dev #login-screen .login-dev-banner { padding:5px 12px; margin-bottom:12px; font-size:.68rem; }
+  #chat-toolbar { max-width:760px; width:100%; margin:0 auto; padding-left:16px; padding-right:16px; }
 }
 </style>
 </head>
@@ -176,7 +183,10 @@ body.in #app { display:flex; }
     <div class="chat-container" id="chat">
       <div class="message bot">Welcome back McKinley</div>
     </div>
-    <div id="app-version">Version beta 1.21</div>
+    <div id="chat-toolbar">
+      <span id="app-version">Version beta 1.22</span>
+      <button type="button" class="chat-clear-btn" onclick="clearChatForSession()">Clear chat</button>
+    </div>
     <div class="quick-actions" id="quick-actions">
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Add customer '">+ Customer</button>
       <button type="button" class="chip" onclick="document.getElementById('chat-input').value='Called '">Log activity</button>
@@ -273,6 +283,7 @@ function previewClient() {
         select() { return api; },
         insert(row) { state.op = 'insert'; state.row = row; return api; },
         update(row) { state.op = 'update'; state.patch = row; return api; },
+        delete() { state.op = 'delete'; return api; },
         eq(key, value) { state.filters.push([key, value]); return api; },
         order() { return api; },
         limit() { return api; },
@@ -295,6 +306,12 @@ function previewClient() {
               if (state.filters.every(([k, v]) => item[k] === v)) Object.assign(item, state.patch);
             });
             if (name === 'profiles') myIbo = state.patch.amway_id ?? myIbo;
+            return Promise.resolve({ data: null, error: null });
+          }
+          if (state.op === 'delete' && bag) {
+            for (let i = bag.length - 1; i >= 0; i--) {
+              if (state.filters.every(([k, v]) => bag[i][k] === v)) bag.splice(i, 1);
+            }
             return Promise.resolve({ data: null, error: null });
           }
           const rows = (bag || []).filter(item => state.filters.every(([k, v]) => item[k] === v));
@@ -323,6 +340,13 @@ let sharesReceived = [];
 let sharedSession = null;
 let pending = null;
 let quickOpen = true;
+let chatUiCleared = false;
+async function clearChatForSession() {
+  if (!confirm('Clear messages from this screen for now? Nothing is deleted from your account — refresh the page to see your history again.')) return;
+  chatUiCleared = true;
+  const chat = document.getElementById('chat');
+  chat.innerHTML = '<div class="chat-cleared-note">Chat cleared for now. Refresh the page to see your saved messages again.</div>';
+}
 function bindChrome() {
   document.querySelectorAll('label.nav-btn').forEach(btn => {
     btn.addEventListener('click', () => showView(btn.getAttribute('for').replace('tab-', '')));
@@ -499,6 +523,10 @@ async function addMessage(text, who = 'bot', html = false, persist = true) {
   }
 }
 async function restoreChat() {
+  if (chatUiCleared) {
+    document.getElementById('chat').innerHTML = '<div class="chat-cleared-note">Chat cleared for now. Refresh the page to see your saved messages again.</div>';
+    return;
+  }
   const { data, error } = await sb.from('chat_messages').select('*').order('created_at', { ascending: true }).limit(200);
   if (error || !data || !data.length) {
     const name = displayName();
@@ -1638,16 +1666,126 @@ async function sendFeedback() {
   await addMessage(error ? 'Feedback failed: ' + error.message : 'Feedback saved. Thank you.');
 }
 
+function customerContactLine(c) {
+  const bits = [];
+  if (c.phone) bits.push('<a href="tel:' + escAttr(c.phone) + '">Call</a> · <a href="sms:' + escAttr(c.phone) + '">Text</a>');
+  if (c.email) bits.push('<a href="mailto:' + escAttr(c.email) + '">' + esc(c.email) + '</a>');
+  return bits.length ? bits.join(' · ') : '<span style="color:var(--dim);">No phone or email</span>';
+}
+function customerDetailHeader(c) {
+  const notes = c.notes ? '<p style="color:var(--dim);font-size:.85rem;margin:8px 0 12px;">' + esc(c.notes) + '</p>' : '';
+  return `<h2 style="font-size:1.3rem;">${esc(c.name)}</h2>
+    <div style="color:var(--dim);font-size:.85rem;margin:6px 0 8px;">Preferred: ${esc(c.preferred || '—')} · Met: ${esc(c.how_met || '—')}${c.amway_id ? ' · Amway ' + esc(c.amway_id) : ''}</div>
+    <div style="margin-bottom:12px;">${customerContactLine(c)}</div>
+    ${notes}
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;">
+      <button class="btn ghost" style="width:auto;padding:8px 12px;margin:0;" onclick="editCustomer('${c.id}')">Edit customer</button>
+    </div>`;
+}
+function preferredOptions(current) {
+  const types = ['Call', 'Text', 'Email', 'App'];
+  if (current && !types.includes(current)) types.unshift(current);
+  return types.map(t => `<option${t === current ? ' selected' : ''}>${esc(t)}</option>`).join('');
+}
+function editCustomer(id) {
+  const c = customerById(id);
+  if (!c) return;
+  openModal(`<button class="modal-close" onclick="closeModal()">×</button>
+    <h3>Edit customer</h3>
+    <label>Name</label><input id="edit-cust-name" class="field" value="${escAttr(c.name)}">
+    <label>How you met</label><input id="edit-cust-how-met" class="field" value="${escAttr(c.how_met || '')}">
+    <label>Phone</label><input id="edit-cust-phone" class="field" type="tel" value="${escAttr(c.phone || '')}">
+    <label>Email</label><input id="edit-cust-email" class="field" type="email" value="${escAttr(c.email || '')}">
+    <label>Preferred contact</label><select id="edit-cust-preferred" class="field">${preferredOptions(c.preferred || 'Text')}</select>
+    <label>Amway customer ID</label><input id="edit-cust-amway" class="field" value="${escAttr(c.amway_id || '')}">
+    <label>Notes</label><textarea id="edit-cust-notes" class="field" rows="3">${esc(c.notes || '')}</textarea>
+    <button class="btn" onclick="reviewCustomerEdit('${c.id}')">Save</button>
+    <button class="btn ghost" style="color:#b42318;border-color:#b42318;" onclick="reviewCustomerDelete('${c.id}')">Delete customer</button>
+    <button class="btn ghost" onclick="openCard('${c.id}')">Back</button>`);
+}
+function readCustomerEditForm() {
+  return {
+    name: document.getElementById('edit-cust-name').value.trim(),
+    how_met: document.getElementById('edit-cust-how-met').value.trim(),
+    phone: document.getElementById('edit-cust-phone').value.trim(),
+    email: document.getElementById('edit-cust-email').value.trim(),
+    preferred: document.getElementById('edit-cust-preferred').value,
+    amway_id: document.getElementById('edit-cust-amway').value.trim(),
+    notes: document.getElementById('edit-cust-notes').value.trim()
+  };
+}
+function reviewCustomerEdit(id) {
+  const draft = readCustomerEditForm();
+  if (!draft.name) { alert('Name is required.'); return; }
+  window._customerDraft = { id, ...draft };
+  openModal(`<button class="modal-close" onclick="closeModal()">×</button>
+    <div class="heard-label">I heard this</div>
+    <div>Update <strong>${esc(draft.name)}</strong><br>
+    Met: ${esc(draft.how_met || '—')}<br>
+    Phone: ${esc(draft.phone || '—')}<br>
+    Email: ${esc(draft.email || '—')}<br>
+    Preferred: ${esc(draft.preferred)}<br>
+  Amway ID: ${esc(draft.amway_id || '—')}<br>
+    Notes: ${esc(draft.notes || '—')}</div>
+    <button class="btn" onclick="saveCustomerEdit()">Confirm</button>
+    <button class="btn ghost" onclick="editCustomer('${id}')">Back</button>`);
+}
+async function saveCustomerEdit() {
+  const draft = window._customerDraft;
+  if (!draft) return;
+  const patch = {
+    name: draft.name,
+    how_met: draft.how_met,
+    phone: draft.phone,
+    email: draft.email,
+    preferred: draft.preferred,
+    amway_id: draft.amway_id,
+    notes: draft.notes
+  };
+  const { error } = await sb.from('customers').update(patch).eq('id', draft.id);
+  if (error) { alert(error.message); return; }
+  const c = customerById(draft.id);
+  if (c) Object.assign(c, patch);
+  window._customerDraft = null;
+  openCard(draft.id);
+  if (currentView === 'customers') renderCustomers();
+}
+function reviewCustomerDelete(id) {
+  const c = customerById(id);
+  if (!c) return;
+  const actN = activities.filter(a => a.customer_id === id).length;
+  const remN = reminders.filter(r => r.customer_id === id).length;
+  openModal(`<button class="modal-close" onclick="closeModal()">×</button>
+    <div class="heard-label">Delete customer?</div>
+    <div>Remove <strong>${esc(c.name)}</strong> from your circle?<br>
+    This deletes ${actN} activit${actN === 1 ? 'y' : 'ies'} and ${remN} reminder${remN === 1 ? '' : 's'}. This cannot be undone.</div>
+    <button class="btn" style="background:#b42318;" onclick="deleteCustomer('${id}')">Confirm delete</button>
+    <button class="btn ghost" onclick="editCustomer('${id}')">Back</button>`);
+}
+async function deleteCustomer(id) {
+  const c = customerById(id);
+  if (!c) return;
+  const { error: e1 } = await sb.from('activities').delete().eq('customer_id', id);
+  if (e1) { alert(e1.message); return; }
+  const { error: e2 } = await sb.from('reminders').delete().eq('customer_id', id);
+  if (e2) { alert(e2.message); return; }
+  const { error: e3 } = await sb.from('customers').delete().eq('id', id);
+  if (e3) { alert(e3.message); return; }
+  activities = activities.filter(a => a.customer_id !== id);
+  reminders = reminders.filter(r => r.customer_id !== id);
+  customers = customers.filter(x => x.id !== id);
+  closeModal();
+  if (currentView === 'customers') renderCustomers();
+  if (currentView === 'followup') renderFollowUp();
+  await addMessage('Removed ' + esc(c.name) + ' from your circle.', 'bot', true);
+}
 function openCard(id) {
   const c = customerById(id);
   if (!c) return;
   const acts = activities.filter(a => a.customer_id === id).slice(0, 20);
   const rows = acts.length ? acts.map(a => `<button type="button" class="history-row" onclick="editActivity('${a.id}')"><span>${formatDate(a.date)}</span><span>${esc(a.type)}</span><span>${esc(a.notes || '—')}</span></button>`).join('') : '<div style="color:var(--dim);padding:16px 0;">No activity yet</div>';
-  const phone = c.phone ? `<a href="tel:${esc(c.phone)}">Call</a> · <a href="sms:${esc(c.phone)}">Text</a>` : '';
   openModal(`<button class="modal-close" onclick="closeModal()">×</button>
-    <h2 style="font-size:1.3rem;">${esc(c.name)}</h2>
-    <div style="color:var(--dim);font-size:.85rem;margin:6px 0 12px;">Preferred: ${esc(c.preferred || '—')} · Met: ${esc(c.how_met || '—')}${c.amway_id ? ' · Amway ' + esc(c.amway_id) : ''}</div>
-    <div style="margin-bottom:10px;">${phone}</div>
+    ${customerDetailHeader(c)}
     <div class="history-head"><span>Date</span><span>Activity</span><span>Notes</span></div>
     ${rows}
     <div style="color:var(--dim);font-size:.75rem;margin-top:8px;">Tap a row to edit or delete it.</div>`);
@@ -1800,9 +1938,9 @@ function exportData() {
 
 function startGuide() {
   const steps = [
-    { title: 'Chat', body: 'Most actions happen here. Type “Add customer Jane Doe” or “Called Mike about samples.” Ask “Who have I reached out to this past week?” for quick history answers.', view: 'chat', highlight: '#chat' },
+    { title: 'Chat', body: 'Most actions happen here. Type “Add customer Jane Doe” or “Called Mike about samples.” Ask “Who have I reached out to this past week?” for quick history answers. Clear chat hides messages until you refresh; nothing is deleted from your account.', view: 'chat', highlight: '#chat' },
     { title: 'Quick actions', body: 'These fill the box so you can finish the sentence. Log activity opens a menu first.', view: 'chat', highlight: '#quick-actions' },
-    { title: 'Customers', body: 'Everyone you track. Tap a name for history, call, and text. Import and export live here.', view: 'customers', highlight: '[data-view="customers"]' },
+    { title: 'Customers', body: 'Everyone you track. Tap a name for history, call, and text. Use Edit customer to change their details or delete them (with confirmation). Import and export live here.', view: 'customers', highlight: '[data-view="customers"]' },
     { title: 'Follow up', body: 'Reminders you set in chat, plus people going quiet (no overlap). Mark reminders Done when finished.', view: 'followup', highlight: '#followup-view' },
     { title: 'Uploads', body: 'Soon you can upload customer lists and order history from Amway.com. CSV/vCard import stays on Customers for now.', view: 'uploads', highlight: '#uploads-view' },
     { title: 'More', body: 'Save your IBO number, share your circle, open Shared with me for read-only circles from other IBOs, or send feedback.', view: 'more', highlight: '#more-view' }
